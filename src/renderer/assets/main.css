@@ -1,0 +1,375 @@
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg-app: #ffffff;
+  --bg-editor: #ffffff;
+  --bg-raised: #f6f6f6;
+  --bg-control: #ffffff;
+  --text-primary: #000000;
+  --text-secondary: #404040;
+  --accent: #0066cc;
+  --accent-soft: rgba(0, 102, 204, 0.16);
+  --border: #b8b8b8;
+  --status-bg: #eeeeee;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-app: #101722;
+  --bg-editor: #0c121b;
+  --bg-raised: #182231;
+  --bg-control: #131c29;
+  --text-primary: #dce5f2;
+  --text-secondary: #8796aa;
+  --accent: #2588e8;
+  --accent-soft: rgba(37, 136, 232, 0.22);
+  --border: #283546;
+  --status-bg: #141d29;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  padding: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+}
+
+#editor {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-editor);
+}
+
+#compare-view {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+}
+
+#compare-view[hidden] {
+  display: none;
+}
+
+#compare-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+#compare-actions button {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text-primary);
+}
+
+#compare-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+#compare-sides {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+#follow-status {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#transient-status {
+  color: var(--text-secondary);
+}
+
+#transient-status.status-error {
+  color: #c42b1c;
+}
+#diff-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+#statusbar {
+  flex: 0 0 auto;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  background: var(--status-bg);
+  color: var(--text-secondary);
+  font:
+    12px Inter,
+    'Noto Sans',
+    'Segoe UI',
+    sans-serif;
+  white-space: nowrap;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.015);
+  user-select: none;
+}
+
+#position,
+#language,
+#word-count,
+#character-count,
+#selection-count,
+#file-size,
+#final-newline,
+#read-only,
+#statusbar label {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+  flex-shrink: 0;
+  margin: 4px 0;
+}
+
+#statusbar [hidden] {
+  display: none;
+}
+
+#word-count,
+#character-count,
+#selection-count {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+  #word-count,
+  #character-count,
+  #file-size {
+    display: none;
+  }
+}
+
+#read-only {
+  color: #ddb96a;
+}
+
+.monaco-editor .bookmark-marker::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 4px;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+#editor.hide-line-numbers .bookmark-marker {
+  display: none;
+}
+
+#position {
+  min-width: 76px;
+  padding-left: 6px;
+  border-left: 0;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+#language {
+  padding-right: 6px;
+}
+
+.status-spacer {
+  flex: 1 1 0;
+}
+
+.status-warning {
+  color: #c56c00;
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] .status-warning {
+  color: #ffaa44;
+}
+
+:root[data-theme='light'] .monaco-editor .bookmark-marker::before {
+  background: #0066cc;
+}
+
+:root[data-theme='dark'] .monaco-editor .bookmark-marker::before {
+  background: #2588e8;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.modal-content {
+  position: relative;
+  min-width: 320px;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.modal-content h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+#shortcuts-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#shortcuts-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+#shortcuts-list li:last-child {
+  border-bottom: none;
+}
+
+#shortcuts-list kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  font:
+    12px monospace,
+    monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.modal-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 740px) {
+  #statusbar > span:not(.status-spacer),
+  #statusbar label {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .status-spacer {
+    display: none;
+  }
+}
+
+#statusbar select {
+  box-sizing: border-box;
+  min-height: 22px;
+  margin: -2px -6px;
+  padding: 2px 22px 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+#statusbar select:hover {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+#statusbar select:active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+#statusbar select:focus-visible {
+  border-color: var(--accent);
+  background: var(--bg-control);
+  color: var(--text-primary);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#statusbar option {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

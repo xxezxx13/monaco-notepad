@@ -1,0 +1,9 @@
+node_modules
+dist
+flatpak-build
+.flatpak-builder
+out
+.DS_Store
+.eslintcache
+*.log*
+.superpowers

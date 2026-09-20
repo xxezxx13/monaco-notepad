@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:"
+    />
+    <title>Untitled - Monaco Notepad</title>
+    <link href="./assets/main.css" type="text/css" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="editor"></div>
+      <div id="statusbar">
+        <span id="position"></span>
+        <span id="word-count" title="Words are runs of non-whitespace characters">Words 0</span>
+        <span id="character-count" title="Unicode characters, including spaces and line endings"
+          >Chars 0</span
+        >
+        <span id="selection-count" hidden></span>
+        <span id="file-size" hidden></span>
+        <span id="final-newline">No Final NL</span>
+        <span
+          id="read-only"
+          title="The original file is not writable. You can edit and use Save As."
+          hidden
+          >Read Only</span
+        >
+        <span
+          id="large-file"
+          class="status-item status-warning"
+          title="Large File Mode: syntax highlighting disabled, word wrap off, line highlight off"
+          hidden
+          >Large File</span
+        >
+        <span id="follow-status" class="status-item" hidden>Following</span>
+        <span id="transient-status" role="status" aria-live="polite" hidden></span>
+        <span class="status-spacer"></span>
+        <label>
+          <span class="sr-only">Encoding</span>
+          <select id="encoding" title="Change document encoding">
+            <option value="utf8">UTF-8</option>
+            <option value="utf8-bom">UTF-8 BOM</option>
+            <option value="utf16le">UTF-16 LE</option>
+            <option value="utf16be">UTF-16 BE</option>
+            <option value="windows1252">ANSI (Windows-1252)</option>
+          </select>
+        </label>
+        <label>
+          <span class="sr-only">Line endings</span>
+          <select id="eol" title="Change line endings">
+            <option value="LF">LF</option>
+            <option value="CRLF">CRLF</option>
+          </select>
+        </label>
+        <label>
+          <span class="sr-only">Language</span>
+          <select id="language" title="Change language"></select>
+        </label>
+      </div>
+      <div
+        id="shortcuts-dialog"
+        class="modal"
+        hidden
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcuts-title"
+      >
+        <div class="modal-overlay" data-close-modal></div>
+        <div class="modal-content">
+          <h2 id="shortcuts-title">Keyboard Shortcuts</h2>
+          <ul id="shortcuts-list"></ul>
+          <div class="modal-actions">
+            <button type="button" data-close-modal>Close</button>
+          </div>
+        </div>
+      </div>
+      <div id="compare-view" hidden>
+        <div id="compare-actions">
+          <strong id="compare-title">Compare Against Disk</strong>
+          <span id="compare-sides" aria-describedby="compare-title">Current buffer ← | Disk →</span>
+          <span id="compare-status" role="status" aria-live="polite"></span>
+          <span class="status-spacer"></span>
+          <button type="button" id="compare-reload">Reload From Disk</button>
+          <button type="button" id="compare-keep">Keep Current Buffer</button>
+          <button type="button" id="compare-close">Return to Editor</button>
+        </div>
+        <div id="diff-editor"></div>
+      </div>
+    </div>
+    <script type="module" src="./src/renderer.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+appId: com.kelvin.monaconotepad
+productName: Monaco Notepad
+fileAssociations:
+  - ext:
+      - txt
+      - text
+      - log
+      - md
+      - markdown
+      - js
+      - mjs
+      - cjs
+      - ts
+      - mts
+      - cts
+      - json
+      - html
+      - htm
+      - css
+      - xml
+      - yaml
+      - yml
+      - py
+      - sh
+    name: Text File
+    description: Text or source file
+    role: Editor
+    mimeType: text/plain
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!tests/**'
+  - '!test-files/**'
+  - '!flatpak-build/**'
+  - '!.flatpak-builder/**'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+linux:
+  syncDesktopName: true
+  executableName: monaco-notepad
+  mimeTypes:
+    - text/markdown
+    - text/javascript
+    - text/html
+    - text/css
+    - text/x-python
+    - application/json
+    - application/xml
+    - application/x-shellscript
+    - application/yaml
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  maintainer: Kelvin
+  category: Utility
+appImage:
+  artifactName: monaco-notepad-v1-x86_64.AppImage
+npmRebuild: false

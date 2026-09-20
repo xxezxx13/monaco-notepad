@@ -1,0 +1,3 @@
+#!/bin/sh
+unset ELECTRON_RUN_AS_NODE
+exec zypak-wrapper /app/lib/monaco-notepad/node_modules/electron/dist/electron /app/lib/monaco-notepad "$@"

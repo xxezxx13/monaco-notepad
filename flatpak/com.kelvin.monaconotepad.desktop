@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Monaco Notepad
+Comment=A minimal desktop text editor
+Exec=monaco-notepad %U
+Icon=com.kelvin.monaconotepad
+Type=Application
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;text/javascript;text/html;text/css;text/x-python;application/json;application/xml;application/x-shellscript;application/yaml;
+StartupNotify=true

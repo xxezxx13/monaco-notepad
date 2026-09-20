@@ -1,0 +1,129 @@
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --text: #000000;
+  --text-secondary: #404040;
+  --border: #b8b8b8;
+  --accent: #0066cc;
+  --section-bg: #f6f6f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #101722;
+    --text: #dce5f2;
+    --text-secondary: #8796aa;
+    --border: #283546;
+    --accent: #2588e8;
+    --section-bg: #182231;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font:
+    13px system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.preferences {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+section {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--section-bg);
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.field span,
+.check span {
+  color: var(--text);
+}
+
+input[type='text'],
+input[type='number'],
+select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+input[type='text']:focus,
+input[type='number']:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+fieldset {
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+legend {
+  padding: 0 4px;
+  color: var(--text-secondary);
+}
+
+fieldset label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 14px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+}

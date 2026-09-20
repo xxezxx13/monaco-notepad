@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Preferences - Monaco Notepad</title>
+    <link href="./preferences.css" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="preferences">
+      <h1>Preferences</h1>
+      <form id="preferences-form">
+        <section>
+          <h2>Editor</h2>
+          <label class="field">
+            <span>Font family</span>
+            <input type="text" id="font-family" />
+          </label>
+          <label class="field">
+            <span>Font size</span>
+            <input type="number" id="font-size" min="8" max="72" />
+          </label>
+          <fieldset>
+            <legend>Tab width</legend>
+            <label><input type="radio" name="tab-size" value="2" /> 2</label>
+            <label><input type="radio" name="tab-size" value="4" /> 4</label>
+            <label><input type="radio" name="tab-size" value="8" /> 8</label>
+          </fieldset>
+          <fieldset>
+            <legend>Indentation style</legend>
+            <label><input type="radio" name="insert-spaces" value="true" /> Spaces</label>
+            <label><input type="radio" name="insert-spaces" value="false" /> Tabs</label>
+          </fieldset>
+          <fieldset>
+            <legend>Auto indent</legend>
+            <label><input type="radio" name="auto-indent" value="none" /> Plain</label>
+            <label><input type="radio" name="auto-indent" value="full" /> Basic</label>
+          </fieldset>
+          <label class="check">
+            <input type="checkbox" id="word-wrap" />
+            <span>Word wrap</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="trim-trailing-whitespace" />
+            <span>Trim trailing whitespace on save</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="show-whitespace" />
+            <span>Show whitespace</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="show-line-numbers" />
+            <span>Show line numbers</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="primary-selection-paste" />
+            <span>Enable primary-selection middle-click paste</span>
+          </label>
+        </section>
+        <section>
+          <h2>Files</h2>
+          <label class="check">
+            <input type="checkbox" id="reopen-last-document" />
+            <span>Reopen last document on startup</span>
+          </label>
+          <label class="field">
+            <span>Large file warning</span>
+            <select id="large-file-warning">
+              <option value="10">10 MiB</option>
+              <option value="20">20 MiB</option>
+              <option value="50">50 MiB</option>
+              <option value="100">100 MiB</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Default encoding for new documents</span>
+            <select id="default-encoding">
+              <option value="utf8">UTF-8</option>
+              <option value="utf8-bom">UTF-8 BOM</option>
+              <option value="utf16le">UTF-16 LE</option>
+              <option value="utf16be">UTF-16 BE</option>
+              <option value="windows1252">ANSI (Windows-1252)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Default line endings for new documents</span>
+            <select id="default-eol">
+              <option value="LF">LF</option>
+              <option value="CRLF">CRLF</option>
+            </select>
+          </label>
+        </section>
+        <section>
+          <h2>Appearance</h2>
+          <label class="check">
+            <input type="checkbox" id="status-bar-visible" />
+            <span>Show status bar</span>
+          </label>
+          <fieldset>
+            <legend>Theme</legend>
+            <label><input type="radio" name="theme" value="system" /> System</label>
+            <label><input type="radio" name="theme" value="light" /> Light</label>
+            <label><input type="radio" name="theme" value="dark" /> Dark</label>
+          </fieldset>
+        </section>
+      </form>
+    </div>
+    <script type="module" src="./preferences.ts"></script>
+  </body>
+</html>
