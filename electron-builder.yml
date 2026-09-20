@@ -33,6 +33,7 @@ files:
   - '!tests/**'
   - '!test-files/**'
   - '!flatpak-build/**'
+  - '!flatpak-node/**'
   - '!.flatpak-builder/**'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'

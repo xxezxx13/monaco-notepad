@@ -7,8 +7,10 @@ base-version: '25.08'
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.node24
 command: monaco-notepad
+
 build-options:
   append-path: /usr/lib/sdk/node24/bin
+
 finish-args:
   - --share=ipc
   - --socket=wayland
@@ -16,22 +18,28 @@ finish-args:
   - --share=network
   - --talk-name=org.freedesktop.portal.Desktop
   - --filesystem=home
+
 modules:
   - name: monaco-notepad
     buildsystem: simple
+
     build-options:
       append-path: /usr/lib/sdk/node24/bin
       env:
         XDG_CACHE_HOME: /run/build/monaco-notepad/flatpak-node/cache
         npm_config_cache: /run/build/monaco-notepad/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+
     build-commands:
       - npm ci --offline
       - npm run build
+      - ./node_modules/.bin/electron-builder --linux --dir --x64 -c.electronDist=/run/build/monaco-notepad/flatpak-node/cache/electron
       - install -d /app/lib/monaco-notepad
-      - cp -a out node_modules package.json /app/lib/monaco-notepad/
+      - cp -a dist/linux-unpacked/. /app/lib/monaco-notepad/
       - install -Dm755 flatpak/monaco-notepad /app/bin/monaco-notepad
       - install -Dm644 flatpak/com.kelvin.monaconotepad.desktop /app/share/applications/com.kelvin.monaconotepad.desktop
       - install -Dm644 build/icon.png /app/share/icons/hicolor/512x512/apps/com.kelvin.monaconotepad.png
+
     sources:
       - type: dir
         path: ..
