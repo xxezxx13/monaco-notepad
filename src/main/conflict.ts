@@ -5,6 +5,7 @@ export type ConflictChoice = 'reload' | 'overwrite' | 'save-as' | 'cancel'
 
 export interface SaveBaselineTracker {
   record(filePath: string | null): void
+  recordSignature(filePath: string, signature: string): void
   check(filePath: string): boolean
   currentPath(): string | null
 }
@@ -26,6 +27,10 @@ export function createSaveBaselineTracker(): SaveBaselineTracker {
     record(filePath: string | null): void {
       baselinePath = filePath ? resolve(filePath) : null
       baselineSignature = filePath ? fileSignature(filePath) : null
+    },
+    recordSignature(filePath: string, signature: string): void {
+      baselinePath = resolve(filePath)
+      baselineSignature = signature
     },
     check(filePath: string): boolean {
       if (resolve(filePath) !== baselinePath) return false

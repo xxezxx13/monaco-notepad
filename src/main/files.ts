@@ -217,6 +217,50 @@ export function decodeTextFile(
   return { text: new TextDecoder('utf-8').decode(bytes), encoding: 'utf8' }
 }
 
+export function decodeTextFileWithEncoding(
+  bytes: Uint8Array,
+  encoding: FileEncoding
+): {
+  text: string
+  encoding: FileEncoding
+} {
+  switch (encoding) {
+    case 'utf8': {
+      const content =
+        bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+          ? bytes.subarray(3)
+          : bytes
+      return { text: new TextDecoder('utf-8').decode(content), encoding }
+    }
+
+    case 'utf8-bom': {
+      const content =
+        bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+          ? bytes.subarray(3)
+          : bytes
+      return { text: new TextDecoder('utf-8').decode(content), encoding }
+    }
+
+    case 'utf16le': {
+      const content =
+        bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.subarray(2) : bytes
+      return { text: new TextDecoder('utf-16le').decode(content), encoding }
+    }
+
+    case 'utf16be': {
+      const content =
+        bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff ? bytes.subarray(2) : bytes
+      return { text: new TextDecoder('utf-16be').decode(content), encoding }
+    }
+
+    case 'windows1252':
+      return {
+        text: iconv.decode(Buffer.from(bytes), 'windows-1252'),
+        encoding
+      }
+  }
+}
+
 function detectEol(text: string): FileEol {
   return text.includes('\r\n') ? 'CRLF' : 'LF'
 }
@@ -242,9 +286,9 @@ export async function openFileDialog(
   return openFilePath(filePath, bomlessEncoding, window)
 }
 
-export async function openFilePath(
+async function readTextFilePath(
   filePath: string,
-  bomlessEncoding: BomlessFileEncoding = 'auto',
+  decoder: (bytes: Uint8Array) => { text: string; encoding: FileEncoding },
   window?: BrowserWindow
 ): Promise<OpenFileResult | null> {
   const fileStats = await stat(filePath)
@@ -293,7 +337,7 @@ export async function openFilePath(
   }
 
   const bytes = await readFile(filePath)
-  const decoded = decodeTextFile(bytes, bomlessEncoding)
+  const decoded = decoder(bytes)
   const eol = detectEol(decoded.text)
   preferences.set('lastDirectory', dirname(filePath))
 
@@ -307,6 +351,22 @@ export async function openFilePath(
     size: fileStats.size,
     largeFileMode: fileStats.size >= warningBytes
   }
+}
+
+export async function openFilePath(
+  filePath: string,
+  bomlessEncoding: BomlessFileEncoding = 'auto',
+  window?: BrowserWindow
+): Promise<OpenFileResult | null> {
+  return readTextFilePath(filePath, (bytes) => decodeTextFile(bytes, bomlessEncoding), window)
+}
+
+export async function reopenFilePath(
+  filePath: string,
+  encoding: FileEncoding,
+  window?: BrowserWindow
+): Promise<OpenFileResult | null> {
+  return readTextFilePath(filePath, (bytes) => decodeTextFileWithEncoding(bytes, encoding), window)
 }
 
 export function encodeTextFile(text: string, encoding: FileEncoding): Uint8Array {

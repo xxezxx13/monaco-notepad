@@ -52,6 +52,15 @@ async function click(label) {
   await delay(150)
 }
 
+async function clickSubmenu(parentLabel, childLabel) {
+  const parent = menuItem(parentLabel)
+  assert.ok(parent?.submenu, `Menu submenu: ${parentLabel}`)
+  const item = parent.submenu.items.find((entry) => entry.label === childLabel)
+  assert.ok(item, `Menu: ${parentLabel} > ${childLabel}`)
+  item.click(item, window)
+  await delay(150)
+}
+
 async function setText(text) {
   await evaluate(`editor.setValue(${JSON.stringify(text)})`)
   await delay(250)
@@ -384,6 +393,44 @@ async function run() {
     'PASS save, self-save suppression, repeated external replacement, read-only guard, Save As'
   )
 
+  const reopenEncodingPath = path.join(temporary, 'reopen-encoding.txt')
+  await fs.writeFile(reopenEncodingPath, 'café', 'utf8')
+  openPath = reopenEncodingPath
+  response = 0
+  await click('Open...')
+  await until(
+    `document.title === 'reopen-encoding.txt - Monaco Notepad' && editor.getValue() === 'café'`,
+    'UTF-8 reopen fixture open'
+  )
+  assert.equal(await evaluate(`document.getElementById('encoding').value`), 'utf8')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  await clickSubmenu('Reopen With Encoding', 'ANSI (Windows-1252)')
+  await until(
+    `editor.getValue() === 'cafÃ©' && document.getElementById('encoding').value === 'windows1252'`,
+    'explicit Windows-1252 reinterpretation'
+  )
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  await setText('dirty reinterpretation')
+  response = 2
+  await clickSubmenu('Reopen With Encoding', 'UTF-8')
+  assert.equal(await evaluate(`editor.getValue()`), 'dirty reinterpretation')
+  assert.equal(await evaluate(`document.getElementById('encoding').value`), 'windows1252')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+
+  response = 1
+  await clickSubmenu('Reopen With Encoding', 'UTF-8')
+  await until(
+    `editor.getValue() === 'café' && document.getElementById('encoding').value === 'utf8'`,
+    'confirmed UTF-8 reopen'
+  )
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+  assert.equal(await fs.readFile(reopenEncodingPath, 'utf8'), 'café')
+  console.log(
+    'PASS Reopen With Encoding explicit reinterpretation, clean state, dirty Cancel, and dirty Discard'
+  )
+
   const safeOpenPath = path.join(temporary, 'binary.dat')
 
   const safeOpenCopyPath = path.join(temporary, 'binary-copy.txt')
@@ -425,6 +472,21 @@ async function run() {
 
     /Safe Open/
   )
+
+  const safeOpenWarningsBeforeReopen = messages.filter(
+    (message) => message.title === 'Likely Binary File'
+  ).length
+  response = 0
+  await clickSubmenu('Reopen With Encoding', 'UTF-8')
+  await until(
+    `editor.getOption(monaco.editor.EditorOption.readOnly) && /Safe Open/.test(document.getElementById('statusbar').innerText)`,
+    'Safe Open explicit reopen protection'
+  )
+  assert.equal(
+    messages.filter((message) => message.title === 'Likely Binary File').length,
+    safeOpenWarningsBeforeReopen + 1
+  )
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
 
   const originalBinaryBytes = await fs.readFile(safeOpenPath)
 

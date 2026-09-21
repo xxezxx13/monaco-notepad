@@ -75,6 +75,19 @@ export function installMenu(window: BrowserWindow): void {
         },
         { type: 'separator' },
         {
+          label: 'Reopen With Encoding',
+          submenu: [
+            ['UTF-8', 'reopen-encoding:utf8'],
+            ['UTF-8 BOM', 'reopen-encoding:utf8-bom'],
+            ['UTF-16 LE', 'reopen-encoding:utf16le'],
+            ['UTF-16 BE', 'reopen-encoding:utf16be'],
+            ['ANSI (Windows-1252)', 'reopen-encoding:windows1252']
+          ].map(([label, command]) => ({
+            label,
+            click: () => window.webContents.send('menu:command', command)
+          }))
+        },
+        {
           label: 'Reload from Disk',
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => window.webContents.send('menu:command', 'reload')

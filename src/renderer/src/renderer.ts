@@ -1200,6 +1200,51 @@ async function openFile(
   loadDocument(result)
 }
 
+async function reopenWithEncoding(encoding: typeof documentState.encoding): Promise<void> {
+  const filePath = documentState.filePath
+
+  if (!filePath) {
+    showTransientStatus('Reopen With Encoding requires a saved file', true)
+    return
+  }
+
+  if (isDocumentDirty(model, documentState) && !(await confirmUnsavedChanges())) {
+    return
+  }
+
+  const generation = documentGeneration
+  const versionBeforeReopen = model.getAlternativeVersionId()
+  const encodingBeforeReopen = documentState.encoding
+
+  let result = await window.api.reopenFilePath(filePath, encoding)
+  if (!result) return
+
+  if (generation !== documentGeneration || documentState.filePath !== filePath) {
+    return
+  }
+
+  if (
+    versionBeforeReopen !== model.getAlternativeVersionId() ||
+    encodingBeforeReopen !== documentState.encoding
+  ) {
+    if (!(await confirmUnsavedChanges())) return
+
+    if (generation !== documentGeneration || documentState.filePath !== filePath) {
+      return
+    }
+
+    result = await window.api.reopenFilePath(filePath, encoding)
+    if (!result) return
+
+    if (generation !== documentGeneration || documentState.filePath !== filePath) {
+      return
+    }
+  }
+
+  loadDocument(result)
+  await window.api.acceptReopenBaseline(result.filePath, result.baselineSignature)
+}
+
 async function saveDocument(saveAs = false, overwrite = false): Promise<boolean> {
   if (documentState.forcedReadOnly && !saveAs) {
     showTransientStatus('Safe Open: use Save As to save a text copy', true)
@@ -1587,7 +1632,11 @@ window.api.onMenuCommand((command) => {
     showTransientStatus('Command unavailable in read-only mode', true)
     return
   }
-  if (followActive && ['save', 'save-as', 'reload', 'revert'].includes(command)) {
+  if (
+    followActive &&
+    (['save', 'save-as', 'reload', 'revert'].includes(command) ||
+      command.startsWith('reopen-encoding:'))
+  ) {
     showTransientStatus('Exit Follow File before saving or reloading', true)
     return
   }
@@ -1600,6 +1649,17 @@ window.api.onMenuCommand((command) => {
       break
     case 'open-ansi':
       runDocumentAction(() => openFile(undefined, 'windows1252'))
+      break
+    case 'reopen-encoding:utf8':
+    case 'reopen-encoding:utf8-bom':
+    case 'reopen-encoding:utf16le':
+    case 'reopen-encoding:utf16be':
+    case 'reopen-encoding:windows1252':
+      runDocumentAction(() =>
+        reopenWithEncoding(
+          command.slice('reopen-encoding:'.length) as typeof documentState.encoding
+        )
+      )
       break
     case 'save':
       runDocumentAction(() => saveDocument())

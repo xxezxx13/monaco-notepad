@@ -15,6 +15,12 @@ type OpenFileResult = {
   largeFileMode: boolean
 } | null
 
+type ReopenFileResult =
+  | (NonNullable<OpenFileResult> & {
+      baselineSignature: string
+    })
+  | null
+
 type EditorPreferences = {
   trimTrailingWhitespaceOnSave: boolean
   autoIndent: 'none' | 'full'
@@ -61,6 +67,11 @@ type MenuCommand =
   | 'new'
   | 'open'
   | 'open-ansi'
+  | 'reopen-encoding:utf8'
+  | 'reopen-encoding:utf8-bom'
+  | 'reopen-encoding:utf16le'
+  | 'reopen-encoding:utf16be'
+  | 'reopen-encoding:windows1252'
   | 'save'
   | 'save-as'
   | 'save-copy'
@@ -181,6 +192,12 @@ const api = {
     filePath: string,
     encoding: BomlessFileEncoding = 'auto'
   ): Promise<OpenFileResult> => ipcRenderer.invoke('file:open-path', filePath, encoding),
+
+  reopenFilePath: (filePath: string, encoding: FileEncoding): Promise<ReopenFileResult> =>
+    ipcRenderer.invoke('file:reopen-with-encoding', filePath, encoding),
+
+  acceptReopenBaseline: (filePath: string, baselineSignature: string): Promise<void> =>
+    ipcRenderer.invoke('file:accept-reopen-baseline', filePath, baselineSignature),
 
   readDiskForCompare: (filePath: string, encoding: BomlessFileEncoding): Promise<OpenFileResult> =>
     ipcRenderer.invoke('file:read-for-compare', filePath, encoding),

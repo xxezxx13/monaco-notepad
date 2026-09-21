@@ -11,6 +11,7 @@ import icon from '../../resources/icon.png?asset'
 import {
   openFileDialog,
   openFilePath,
+  reopenFilePath,
   saveFile,
   getFileReadOnly,
   type BomlessFileEncoding,
@@ -57,6 +58,7 @@ function sendPortalTheme(theme: PortalTheme): void {
 
 function startPortalThemeMonitor(): void {
   if (process.platform !== 'linux') return
+  if (portalMonitor) return
   const args = [
     'monitor',
     '--session',
@@ -66,19 +68,29 @@ function startPortalThemeMonitor(): void {
     '/org/freedesktop/portal/desktop'
   ]
   try {
-    portalMonitor = spawn('gdbus', args, { stdio: ['ignore', 'pipe', 'ignore'] })
-    portalMonitor.stdout?.on('data', (chunk: Buffer) => {
+    const monitor = spawn('gdbus', args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    portalMonitor = monitor
+    monitor.stdout?.on('data', (chunk: Buffer) => {
       const output = chunk.toString()
       if (output.includes('SettingChanged') && output.includes('color-scheme')) {
         sendPortalTheme(portalThemeFromOutput(output))
       }
     })
-    portalMonitor.once('error', () => {
-      portalMonitor = null
+    monitor.once('error', () => {
+      if (portalMonitor === monitor) portalMonitor = null
+    })
+    monitor.once('close', () => {
+      if (portalMonitor === monitor) portalMonitor = null
     })
   } catch {
     portalMonitor = null
   }
+}
+
+function stopPortalThemeMonitor(): void {
+  const monitor = portalMonitor
+  portalMonitor = null
+  if (monitor) monitor.kill()
 }
 
 function queryPortalTheme(): void {
@@ -435,6 +447,9 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+app.once('will-quit', stopPortalThemeMonitor)
+process.once('exit', stopPortalThemeMonitor)
+
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return
 
@@ -660,6 +675,64 @@ app.whenReady().then(() => {
         })
         return null
       }
+    }
+  )
+
+  ipcMain.handle(
+    'file:reopen-with-encoding',
+    async (event, filePath: string, encoding: FileEncoding) => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+
+      if (!window) throw new Error('Unable to resolve application window')
+
+      try {
+        if (!['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252'].includes(encoding)) {
+          throw new Error('Unsupported file encoding')
+        }
+
+        const signatureBefore = fileSignature(filePath)
+        if (signatureBefore === null) {
+          throw new Error('The file could not be identified before reopening.')
+        }
+
+        const result = await reopenFilePath(filePath, encoding, window)
+        if (!result) return null
+
+        const baselineSignature = fileSignature(result.filePath)
+        if (baselineSignature === null || baselineSignature !== signatureBefore) {
+          throw new Error('The file changed while it was being reopened. Try again.')
+        }
+
+        return { ...result, baselineSignature }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+
+        await dialog.showMessageBox(window, {
+          type: 'error',
+          title: 'Reopen Error',
+          message: 'The file could not be reopened with the selected encoding.',
+          detail,
+          buttons: ['OK']
+        })
+
+        return null
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'file:accept-reopen-baseline',
+    (_event, filePath: string, baselineSignature: string) => {
+      if (
+        typeof filePath !== 'string' ||
+        filePath.length === 0 ||
+        typeof baselineSignature !== 'string' ||
+        baselineSignature.length === 0
+      ) {
+        throw new Error('Invalid reopen baseline')
+      }
+
+      saveBaseline.recordSignature(filePath, baselineSignature)
     }
   )
 

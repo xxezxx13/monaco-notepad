@@ -91,6 +91,22 @@ test('recording baseline after save resets conflict check', async (t) => {
   assert.equal(tracker.check(file), false)
 })
 
+test('recordSignature preserves the captured baseline instead of rereading later disk state', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const tracker = createSaveBaselineTracker()
+  const file = join(directory, 'captured.txt')
+
+  await writeFile(file, 'original')
+  const captured = fileSignature(file)
+  assert.ok(captured)
+
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await writeFile(file, 'external edit')
+
+  tracker.recordSignature(file, captured)
+  assert.equal(tracker.check(file), true)
+})
+
 test('different path is not compared to baseline', async (t) => {
   const directory = await temporaryDirectory(t)
   const tracker = createSaveBaselineTracker()

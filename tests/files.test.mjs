@@ -68,11 +68,13 @@ vm.runInNewContext(compiled, {
 })
 const {
   decodeTextFile,
+  decodeTextFileWithEncoding,
   detectBomlessUtf16,
   encodeTextFile,
   getFileReadOnly,
   isLikelyBinary,
   openFilePath,
+  reopenFilePath,
   saveFile,
   writeTextFileAtomic
 } = module.exports
@@ -100,6 +102,22 @@ test('all five encodings round-trip Unicode/ANSI text and CRLF', () => {
   }
   assert.equal(decodeTextFile(Buffer.from('Hello 世界')).encoding, 'utf8')
   assert.throws(() => encodeTextFile('Hello 世界', 'windows1252'), /cannot be represented/)
+})
+
+test('explicit decoding honors the selected encoding without auto-detection', () => {
+  const text = 'café résumé £ € “quotes” —\r\nsecond line\r\n'
+
+  for (const encoding of ['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252']) {
+    const bytes = encodeTextFile(text, encoding)
+    const decoded = decodeTextFileWithEncoding(bytes, encoding)
+
+    assert.equal(decoded.text, text, encoding)
+    assert.equal(decoded.encoding, encoding)
+  }
+
+  const utf8Bytes = Buffer.from('café', 'utf8')
+  assert.equal(decodeTextFileWithEncoding(utf8Bytes, 'utf8').text, 'café')
+  assert.equal(decodeTextFileWithEncoding(utf8Bytes, 'windows1252').text, 'cafÃ©')
 })
 
 test('BOM-less UTF-16 is detected before binary classification', () => {
@@ -298,6 +316,22 @@ test('Safe Open protected paths cannot be overwritten', async (t) => {
   assert.deepEqual(await readFile(original), originalBytes)
 
   saveDialogPath = null
+})
+
+test('explicit reopen preserves Safe Open protection for likely binary files', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'binary-reopen.dat')
+  await writeFile(file, Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0x10]))
+
+  dialogResponse = 1
+  assert.equal(await reopenFilePath(file, 'utf8'), null)
+
+  dialogResponse = 0
+  const reopened = await reopenFilePath(file, 'utf8')
+
+  assert.ok(reopened)
+  assert.equal(reopened.encoding, 'utf8')
+  assert.equal(reopened.forcedReadOnly, true)
 })
 
 test('large-file Cancel reads no content; Open reads the complete file', async (t) => {
