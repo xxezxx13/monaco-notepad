@@ -10,6 +10,7 @@ type OpenFileResult = {
   encoding: FileEncoding
   eol: 'LF' | 'CRLF'
   readOnly: boolean
+  forcedReadOnly: boolean
   size: number
   largeFileMode: boolean
 } | null
@@ -27,6 +28,7 @@ type SaveFileRequest = {
   text: string
   encoding: FileEncoding
   baselineCheck?: boolean
+  protectedPath?: string | null
 }
 
 type SaveFileResult =

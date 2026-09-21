@@ -8,6 +8,8 @@ export interface DocumentState {
   savedVersionId: number
   readOnly: boolean
   voluntaryReadOnly: boolean
+  forcedReadOnly: boolean
+  protectedPath: string | null
   fileSize: number | null
   languageOverride: string | null
   largeFileMode: boolean
@@ -22,6 +24,8 @@ export function createDocumentState(model: monaco.editor.ITextModel): DocumentSt
     savedVersionId: model.getAlternativeVersionId(),
     readOnly: false,
     voluntaryReadOnly: false,
+    forcedReadOnly: false,
+    protectedPath: null,
     fileSize: null,
     languageOverride: null,
     largeFileMode: false

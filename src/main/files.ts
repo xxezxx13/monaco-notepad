@@ -1,6 +1,6 @@
 import { dialog, BrowserWindow, type MessageBoxOptions } from 'electron'
 import { constants, type Stats } from 'node:fs'
-import { access, lstat, readFile, realpath, stat } from 'node:fs/promises'
+import { access, lstat, open, readFile, realpath, stat } from 'node:fs/promises'
 import writeFileAtomic from 'write-file-atomic'
 import { basename, dirname, resolve } from 'node:path'
 import iconv from 'iconv-lite'
@@ -10,6 +10,7 @@ export type FileEncoding = 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' | 'window
 export type BomlessFileEncoding = 'auto' | 'utf8' | 'windows1252'
 export type FileEol = 'LF' | 'CRLF'
 export const DEFAULT_LARGE_FILE_WARNING_BYTES = 20 * 1024 * 1024
+export const SAFE_OPEN_PROBE_BYTES = 8 * 1024
 
 export function largeFileWarningBytes(mebibytes: 10 | 20 | 50 | 100): number {
   return mebibytes * 1024 * 1024
@@ -21,6 +22,7 @@ export interface OpenFileResult {
   encoding: FileEncoding
   eol: FileEol
   readOnly: boolean
+  forcedReadOnly: boolean
   size: number
   largeFileMode: boolean
 }
@@ -89,6 +91,70 @@ export async function getFileReadOnly(filePath: string): Promise<boolean> {
   }
 }
 
+export function detectBomlessUtf16(bytes: Uint8Array): 'utf16le' | 'utf16be' | null {
+  const pairs = Math.floor(bytes.length / 2)
+  if (pairs < 2) return null
+
+  let evenNuls = 0
+  let oddNuls = 0
+
+  for (let i = 0; i < pairs * 2; i += 2) {
+    if (bytes[i] === 0) evenNuls++
+    if (bytes[i + 1] === 0) oddNuls++
+  }
+
+  const evenRatio = evenNuls / pairs
+  const oddRatio = oddNuls / pairs
+
+  // Conservative detection for the common BOM-less UTF-16 case where
+  // ASCII-range text produces a strong alternating NUL-byte pattern.
+  if (oddNuls >= 2 && oddRatio >= 0.3 && evenRatio <= 0.05) return 'utf16le'
+  if (evenNuls >= 2 && evenRatio >= 0.3 && oddRatio <= 0.05) return 'utf16be'
+
+  return null
+}
+
+function hasUnicodeBom(bytes: Uint8Array): boolean {
+  return (
+    (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) ||
+    (bytes.length >= 2 &&
+      ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)))
+  )
+}
+
+export function isLikelyBinary(bytes: Uint8Array): boolean {
+  if (bytes.length === 0 || hasUnicodeBom(bytes) || detectBomlessUtf16(bytes)) {
+    return false
+  }
+
+  let suspiciousControls = 0
+
+  for (const byte of bytes) {
+    // After UTF-16 detection, a NUL byte is a strong binary signal.
+    if (byte === 0) return true
+
+    const allowedWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0c || byte === 0x0d
+
+    if ((byte < 0x20 && !allowedWhitespace) || byte === 0x7f) {
+      suspiciousControls++
+    }
+  }
+
+  return suspiciousControls / bytes.length >= 0.1
+}
+
+async function readOpenProbe(filePath: string): Promise<Uint8Array> {
+  const handle = await open(filePath, 'r')
+
+  try {
+    const buffer = Buffer.allocUnsafe(SAFE_OPEN_PROBE_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
 export function decodeTextFile(
   bytes: Uint8Array,
   bomlessEncoding: BomlessFileEncoding = 'auto'
@@ -114,6 +180,16 @@ export function decodeTextFile(
     return {
       text: new TextDecoder('utf-16be').decode(bytes.subarray(2)),
       encoding: 'utf16be'
+    }
+  }
+
+  if (bomlessEncoding === 'auto') {
+    const utf16 = detectBomlessUtf16(bytes)
+    if (utf16) {
+      return {
+        text: new TextDecoder(utf16 === 'utf16le' ? 'utf-16le' : 'utf-16be').decode(bytes),
+        encoding: utf16
+      }
     }
   }
 
@@ -192,6 +268,30 @@ export async function openFilePath(
     if (result.response !== 0) return null
   }
 
+  const probe = await readOpenProbe(filePath)
+  let forcedReadOnly = false
+
+  if (isLikelyBinary(probe)) {
+    const options: MessageBoxOptions = {
+      type: 'warning',
+      title: 'Likely Binary File',
+      message: 'This file appears to contain binary data.',
+      detail:
+        'Opening it as text may display unreadable characters. Monaco Notepad will lock the document to prevent accidental overwrite.',
+      buttons: ['Open Read-Only Anyway', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true
+    }
+
+    const result = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options)
+
+    if (result.response !== 0) return null
+    forcedReadOnly = true
+  }
+
   const bytes = await readFile(filePath)
   const decoded = decodeTextFile(bytes, bomlessEncoding)
   const eol = detectEol(decoded.text)
@@ -203,6 +303,7 @@ export async function openFilePath(
     encoding: decoded.encoding,
     eol,
     readOnly: await getFileReadOnly(filePath),
+    forcedReadOnly,
     size: fileStats.size,
     largeFileMode: fileStats.size >= warningBytes
   }
@@ -271,6 +372,7 @@ export interface SaveFileRequest {
   filePath: string | null
   text: string
   encoding: FileEncoding
+  protectedPath?: string | null
 }
 
 export async function saveFile(
@@ -294,6 +396,30 @@ export async function saveFile(
 
     filePath = result.filePath
     preferences.set('lastDirectory', dirname(filePath))
+  }
+
+  if (request.protectedPath) {
+    const requested = resolve(filePath)
+    const protectedResolved = resolve(request.protectedPath)
+
+    let requestedReal = requested
+    let protectedReal = protectedResolved
+
+    try {
+      requestedReal = await realpath(filePath)
+    } catch (error) {
+      if (!isMissingFile(error)) throw error
+    }
+
+    try {
+      protectedReal = await realpath(request.protectedPath)
+    } catch (error) {
+      if (!isMissingFile(error)) throw error
+    }
+
+    if (requested === protectedResolved || requestedReal === protectedReal) {
+      throw new Error('Safe Open prevents overwriting the original file. Choose a different path.')
+    }
   }
 
   await writeTextFileAtomic(filePath, request.text, request.encoding)

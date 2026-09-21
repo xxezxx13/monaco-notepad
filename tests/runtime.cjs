@@ -384,6 +384,131 @@ async function run() {
     'PASS save, self-save suppression, repeated external replacement, read-only guard, Save As'
   )
 
+  const safeOpenPath = path.join(temporary, 'binary.dat')
+
+  const safeOpenCopyPath = path.join(temporary, 'binary-copy.txt')
+
+  const safeOpenBytes = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0x10])
+
+  await fs.writeFile(safeOpenPath, safeOpenBytes)
+
+  const valueBeforeSafeOpen = await evaluate('editor.getValue()')
+
+  const titleBeforeSafeOpen = await evaluate('document.title')
+
+  openPath = safeOpenPath
+
+  response = 1
+
+  await click('Open...')
+
+  assert.equal(await evaluate('editor.getValue()'), valueBeforeSafeOpen)
+
+  assert.equal(await evaluate('document.title'), titleBeforeSafeOpen)
+
+  assert.ok(messages.some((message) => message.title === 'Likely Binary File'))
+
+  response = 0
+
+  await click('Open...')
+
+  await until(`document.title === 'binary.dat - Monaco Notepad'`, 'Safe Open binary document')
+
+  assert.equal(
+    await evaluate('editor.getOption(monaco.editor.EditorOption.readOnly)'),
+
+    true
+  )
+
+  assert.match(
+    await evaluate(`document.getElementById('statusbar').innerText`),
+
+    /Safe Open/
+  )
+
+  const originalBinaryBytes = await fs.readFile(safeOpenPath)
+
+  await click('Save')
+
+  assert.deepEqual(await fs.readFile(safeOpenPath), originalBinaryBytes)
+
+  assert.match(
+    await evaluate(`document.getElementById('transient-status').innerText`),
+
+    /Safe Open/
+  )
+
+  const saveErrorsBeforeProtectedPath = messages.filter(
+    (message) => message.title === 'Save Error'
+  ).length
+
+  savePath = safeOpenPath
+
+  await click('Save As...')
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (
+      messages.filter((message) => message.title === 'Save Error').length >
+      saveErrorsBeforeProtectedPath
+    ) {
+      break
+    }
+
+    await delay(50)
+  }
+
+  assert.equal(
+    messages.filter((message) => message.title === 'Save Error').length,
+
+    saveErrorsBeforeProtectedPath + 1
+  )
+
+  assert.deepEqual(await fs.readFile(safeOpenPath), originalBinaryBytes)
+
+  assert.equal(
+    await evaluate('editor.getOption(monaco.editor.EditorOption.readOnly)'),
+
+    true
+  )
+
+  savePath = safeOpenCopyPath
+
+  await click('Save As...')
+
+  await until(
+    `document.title === 'binary-copy.txt - Monaco Notepad'`,
+
+    'Safe Open Save As copy'
+  )
+
+  assert.equal(
+    await evaluate('editor.getOption(monaco.editor.EditorOption.readOnly)'),
+
+    false
+  )
+
+  assert.equal(await evaluate(`document.getElementById('read-only').hidden`), true)
+
+  assert.deepEqual(await fs.readFile(safeOpenPath), originalBinaryBytes)
+
+  await setText('Safe Open copy is now editable')
+
+  await click('Save')
+
+  await until(`!document.title.startsWith('*')`, 'Safe Open copy normal save')
+
+  assert.equal(
+    await fs.readFile(safeOpenCopyPath, 'utf8'),
+
+    'Safe Open copy is now editable'
+  )
+
+  assert.deepEqual(await fs.readFile(safeOpenPath), originalBinaryBytes)
+
+  console.log(
+    'PASS Safe Open cancel, forced read-only, protected original, Save As unlock, and normal save'
+  )
+
   const followedPath = path.join(temporary, 'follow.log')
   await fs.writeFile(
     followedPath,

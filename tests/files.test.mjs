@@ -26,10 +26,14 @@ const require = createRequire(sourcePath)
 const dialogCalls = []
 const fileReads = []
 let dialogResponse = 1
+let saveDialogPath = null
 const dialog = {
   async showMessageBox(...args) {
     dialogCalls.push(args)
     return { response: dialogResponse }
+  },
+  async showSaveDialog() {
+    return { canceled: !saveDialogPath, filePath: saveDialogPath }
   }
 }
 const module = { exports: {} }
@@ -62,8 +66,16 @@ vm.runInNewContext(compiled, {
     return require(name)
   }
 })
-const { decodeTextFile, encodeTextFile, getFileReadOnly, openFilePath, writeTextFileAtomic } =
-  module.exports
+const {
+  decodeTextFile,
+  detectBomlessUtf16,
+  encodeTextFile,
+  getFileReadOnly,
+  isLikelyBinary,
+  openFilePath,
+  saveFile,
+  writeTextFileAtomic
+} = module.exports
 
 test('all supported large-file warning thresholds map to exact MiB values', () => {
   for (const threshold of [10, 20, 50, 100]) {
@@ -88,6 +100,37 @@ test('all five encodings round-trip Unicode/ANSI text and CRLF', () => {
   }
   assert.equal(decodeTextFile(Buffer.from('Hello 世界')).encoding, 'utf8')
   assert.throws(() => encodeTextFile('Hello 世界', 'windows1252'), /cannot be represented/)
+})
+
+test('BOM-less UTF-16 is detected before binary classification', () => {
+  const text = 'Hello world\r\nsecond line'
+
+  const littleEndian = Buffer.from(text, 'utf16le')
+  const bigEndian = Buffer.allocUnsafe(littleEndian.length)
+
+  for (let i = 0; i < littleEndian.length; i += 2) {
+    bigEndian[i] = littleEndian[i + 1]
+    bigEndian[i + 1] = littleEndian[i]
+  }
+
+  assert.equal(detectBomlessUtf16(littleEndian), 'utf16le')
+  assert.equal(detectBomlessUtf16(bigEndian), 'utf16be')
+  assert.equal(isLikelyBinary(littleEndian), false)
+  assert.equal(isLikelyBinary(bigEndian), false)
+
+  const decodedLe = decodeTextFile(littleEndian)
+  assert.equal(decodedLe.encoding, 'utf16le')
+  assert.equal(decodedLe.text, text)
+
+  const decodedBe = decodeTextFile(bigEndian)
+  assert.equal(decodedBe.encoding, 'utf16be')
+  assert.equal(decodedBe.text, text)
+})
+
+test('binary heuristic accepts normal text and rejects NUL/control-heavy data', () => {
+  assert.equal(isLikelyBinary(Buffer.from('plain text\nsecond line\n')), false)
+  assert.equal(isLikelyBinary(Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0x10])), true)
+  assert.equal(isLikelyBinary(Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x41, 0x42, 0x43])), true)
 })
 
 test('atomic saves preserve executable mode and ownership', async (t) => {
@@ -177,6 +220,86 @@ test('deleted ordinary files can be recreated, and rejected ANSI saves preserve 
   assert.equal(await readFile(file, 'utf8'), 'restored')
 })
 
+test('likely-binary files require explicit read-only acceptance', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'binary.dat')
+  await writeFile(file, Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0x10]))
+
+  const parentWindow = {}
+  dialogCalls.length = 0
+  fileReads.length = 0
+  dialogResponse = 1
+
+  assert.equal(await openFilePath(file, 'auto', parentWindow), null)
+  assert.equal(fileReads.length, 0)
+  assert.equal(dialogCalls.length, 1)
+  assert.deepEqual([...dialogCalls[0][1].buttons], ['Open Read-Only Anyway', 'Cancel'])
+  assert.equal(dialogCalls[0][1].cancelId, 1)
+
+  dialogResponse = 0
+  const opened = await openFilePath(file, 'auto', parentWindow)
+
+  assert.equal(opened.forcedReadOnly, true)
+  assert.equal(fileReads.length, 1)
+})
+
+test('Safe Open protected paths cannot be overwritten', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const original = join(directory, 'original.dat')
+  const copy = join(directory, 'copy.txt')
+  const originalBytes = Buffer.from([0x00, 0x01, 0x02, 0x03])
+
+  await writeFile(original, originalBytes)
+
+  await assert.rejects(
+    saveFile(
+      {},
+      {
+        filePath: original,
+        text: 'replacement',
+        encoding: 'utf8',
+        protectedPath: original
+      }
+    ),
+    /Safe Open prevents overwriting/
+  )
+
+  assert.deepEqual(await readFile(original), originalBytes)
+
+  saveDialogPath = original
+  await assert.rejects(
+    saveFile(
+      {},
+      {
+        filePath: null,
+        text: 'replacement',
+        encoding: 'utf8',
+        protectedPath: original
+      }
+    ),
+    /Safe Open prevents overwriting/
+  )
+
+  assert.deepEqual(await readFile(original), originalBytes)
+
+  saveDialogPath = copy
+  const saved = await saveFile(
+    {},
+    {
+      filePath: null,
+      text: 'safe copy',
+      encoding: 'utf8',
+      protectedPath: original
+    }
+  )
+
+  assert.equal(saved, copy)
+  assert.equal(await readFile(copy, 'utf8'), 'safe copy')
+  assert.deepEqual(await readFile(original), originalBytes)
+
+  saveDialogPath = null
+})
+
 test('large-file Cancel reads no content; Open reads the complete file', async (t) => {
   const directory = await temporaryDirectory(t)
   const file = join(directory, 'large.txt')
@@ -201,6 +324,7 @@ test('large-file Cancel reads no content; Open reads the complete file', async (
   assert.equal(opened.eol, 'CRLF')
   assert.equal(opened.encoding, 'utf8')
   assert.equal(opened.readOnly, false)
+  assert.equal(opened.forcedReadOnly, false)
   assert.equal(opened.size, Buffer.byteLength(text))
   assert.equal(fileReads.length, 1)
 })
@@ -213,6 +337,7 @@ test('small files open without warning; directories cannot be opened as files', 
   const opened = await openFilePath(file)
   assert.equal(opened.text, 'café')
   assert.equal(opened.encoding, 'windows1252')
+  assert.equal(opened.forcedReadOnly, false)
   assert.equal(dialogCalls.length, 0)
   await assert.rejects(openFilePath(dirname(file)), /regular files/)
 })

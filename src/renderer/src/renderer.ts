@@ -774,7 +774,10 @@ async function refreshReadOnly(): Promise<void> {
 }
 
 function applyReadOnlyState(): void {
-  editor.updateOptions({ readOnly: documentState.readOnly || documentState.voluntaryReadOnly })
+  editor.updateOptions({
+    readOnly:
+      documentState.readOnly || documentState.voluntaryReadOnly || documentState.forcedReadOnly
+  })
   updateStatusBar()
 }
 
@@ -1002,14 +1005,20 @@ function updateStatusBar(): void {
   encodingStatus.value = documentState.encoding
   eolStatus.value = documentState.eol
   languageStatus.value = documentState.languageOverride ?? 'auto'
-  readOnlyStatus.hidden = !(documentState.readOnly || documentState.voluntaryReadOnly)
+  readOnlyStatus.hidden = !(
+    documentState.readOnly ||
+    documentState.voluntaryReadOnly ||
+    documentState.forcedReadOnly
+  )
   readOnlyStatus.textContent = followActive
     ? 'Follow Lock'
-    : documentState.readOnly
-      ? 'Read Only'
-      : documentState.voluntaryReadOnly
-        ? 'Locked'
-        : 'Read Only'
+    : documentState.forcedReadOnly
+      ? 'Safe Open'
+      : documentState.readOnly
+        ? 'Read Only'
+        : documentState.voluntaryReadOnly
+          ? 'Locked'
+          : 'Read Only'
   fileSizeStatus.hidden = documentState.fileSize === null
   fileSizeStatus.textContent =
     documentState.fileSize === null ? '' : formatFileSize(documentState.fileSize)
@@ -1090,6 +1099,8 @@ async function newDocument(): Promise<void> {
   documentState.savedVersionId = model.getAlternativeVersionId()
   documentState.readOnly = false
   documentState.voluntaryReadOnly = false
+  documentState.forcedReadOnly = false
+  documentState.protectedPath = null
   documentState.fileSize = null
   documentState.languageOverride = null
   documentState.largeFileMode = false
@@ -1123,6 +1134,8 @@ function loadDocument(result: NonNullable<Awaited<ReturnType<typeof window.api.o
   documentState.savedVersionId = model.getAlternativeVersionId()
   documentState.readOnly = result.readOnly
   documentState.voluntaryReadOnly = false
+  documentState.forcedReadOnly = result.forcedReadOnly
+  documentState.protectedPath = result.forcedReadOnly ? result.filePath : null
   documentState.fileSize = result.size
   setLargeFileMode(result.largeFileMode)
   applyReadOnlyState()
@@ -1188,6 +1201,11 @@ async function openFile(
 }
 
 async function saveDocument(saveAs = false, overwrite = false): Promise<boolean> {
+  if (documentState.forcedReadOnly && !saveAs) {
+    showTransientStatus('Safe Open: use Save As to save a text copy', true)
+    return false
+  }
+
   if (editorPreferences.trimTrailingWhitespaceOnSave) {
     executeReplacement(
       wholeDocumentRange(),
@@ -1202,7 +1220,8 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
     filePath: saveAs ? null : documentState.filePath,
     text: model.getValue(),
     encoding: savedEncoding,
-    baselineCheck: !overwrite
+    baselineCheck: !overwrite,
+    protectedPath: documentState.protectedPath
   })
 
   if (result.action === 'conflict') {
@@ -1227,6 +1246,12 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
   const filePath = result.filePath
   if (generation !== documentGeneration) return false
   documentState.filePath = filePath
+
+  if (saveAs && documentState.forcedReadOnly) {
+    documentState.forcedReadOnly = false
+    documentState.protectedPath = null
+  }
+
   // The user may have kept typing or changed encoding while the write ran.
   // Only the snapshot actually sent to the main process is now saved.
   documentState.savedEncoding = savedEncoding
@@ -1254,7 +1279,8 @@ async function saveCopy(): Promise<void> {
   await window.api.saveCopy({
     filePath: null,
     text: model.getValue(),
-    encoding: documentState.encoding
+    encoding: documentState.encoding,
+    protectedPath: documentState.protectedPath
   })
   editor.focus()
 }
