@@ -139,7 +139,7 @@ async function run() {
     '{\n    "a": [\n        1,\n        true\n    ]\n}'
   )
   await click('Undo')
-  assert.equal(await evaluate('editor.getValue()'), '{"a":[1,true]}')
+  await until(`editor.getValue() === '{"a":[1,true]}'`, 'undo formatted JSON')
   await setText('one two')
   await evaluate(
     `editor.setSelections([new monaco.Selection(1,1,1,4), new monaco.Selection(1,5,1,8)])`
@@ -147,7 +147,7 @@ async function run() {
   await click('Base64 Encode')
   assert.equal(await evaluate('editor.getValue()'), 'b25l dHdv')
   await click('Undo')
-  assert.equal(await evaluate('editor.getValue()'), 'one two')
+  await until(`editor.getValue() === 'one two'`, 'undo Base64 encode')
   await setText('b25l %%%%')
   await evaluate(
     `editor.setSelections([new monaco.Selection(1,1,1,5), new monaco.Selection(1,6,1,10)])`
@@ -159,7 +159,7 @@ async function run() {
   await click('Format JSON')
   assert.equal(await evaluate('editor.getValue()'), 'prefix {\n    "a": 1\n} suffix')
   await click('Undo')
-  assert.equal(await evaluate('editor.getValue()'), 'prefix {"a":1} suffix')
+  await until(`editor.getValue() === 'prefix {"a":1} suffix'`, 'undo selected JSON format')
   await setText('{bad}')
   await evaluate(`editor.setPosition({lineNumber: 1, column: 1})`)
   await click('Format JSON')

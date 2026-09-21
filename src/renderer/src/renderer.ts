@@ -1496,7 +1496,11 @@ window.api.onFollowUpdate((update) => {
   documentState.eol = model.getEOL() === '\r\n' ? 'CRLF' : 'LF'
   updateTitle()
   updateStatusBar()
-  if (followAutoScroll) requestAnimationFrame(revealFollowEnd)
+  if (followAutoScroll) {
+    requestAnimationFrame(() => {
+      if (followActive && followAutoScroll) revealFollowEnd()
+    })
+  }
   updateFollowStatus(followAutoScroll ? 'active' : 'paused')
 })
 
