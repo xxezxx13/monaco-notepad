@@ -9,6 +9,19 @@ import { preferences } from './preferences'
 export type FileEncoding = 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' | 'windows1252'
 export type BomlessFileEncoding = 'auto' | 'utf8' | 'windows1252'
 export type FileEol = 'LF' | 'CRLF'
+
+export interface FileEolCounts {
+  crlf: number
+  lf: number
+  cr: number
+}
+
+export type FileEolKind = 'LF' | 'CRLF' | 'CR' | 'Mixed'
+
+export interface FileEolInfo {
+  kind: FileEolKind
+  counts: FileEolCounts
+}
 export const DEFAULT_LARGE_FILE_WARNING_BYTES = 20 * 1024 * 1024
 export const SAFE_OPEN_PROBE_BYTES = 8 * 1024
 
@@ -21,6 +34,7 @@ export interface OpenFileResult {
   text: string
   encoding: FileEncoding
   eol: FileEol
+  sourceEol: FileEolInfo
   readOnly: boolean
   forcedReadOnly: boolean
   size: number
@@ -261,8 +275,40 @@ export function decodeTextFileWithEncoding(
   }
 }
 
-function detectEol(text: string): FileEol {
-  return text.includes('\r\n') ? 'CRLF' : 'LF'
+export function analyzeEol(text: string): FileEolInfo {
+  let crlf = 0
+  let lf = 0
+  let cr = 0
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]
+
+    if (character === '\r') {
+      if (text[index + 1] === '\n') {
+        crlf++
+        index++
+      } else {
+        cr++
+      }
+    } else if (character === '\n') {
+      lf++
+    }
+  }
+
+  const forms = Number(crlf > 0) + Number(lf > 0) + Number(cr > 0)
+
+  const kind: FileEolKind = forms > 1 ? 'Mixed' : crlf > 0 ? 'CRLF' : cr > 0 ? 'CR' : 'LF'
+
+  return {
+    kind,
+    counts: { crlf, lf, cr }
+  }
+}
+
+function modelEolFromSource(sourceEol: FileEolInfo): FileEol {
+  // Preserve the current Monaco model-EOL policy for now. Source EOL
+  // accounting is deliberately separate from the model's uniform EOL.
+  return sourceEol.counts.crlf > 0 ? 'CRLF' : 'LF'
 }
 
 export async function openFileDialog(
@@ -338,7 +384,8 @@ async function readTextFilePath(
 
   const bytes = await readFile(filePath)
   const decoded = decoder(bytes)
-  const eol = detectEol(decoded.text)
+  const sourceEol = analyzeEol(decoded.text)
+  const eol = modelEolFromSource(sourceEol)
   preferences.set('lastDirectory', dirname(filePath))
 
   return {
@@ -346,6 +393,7 @@ async function readTextFilePath(
     text: decoded.text,
     encoding: decoded.encoding,
     eol,
+    sourceEol,
     readOnly: await getFileReadOnly(filePath),
     forcedReadOnly,
     size: fileStats.size,

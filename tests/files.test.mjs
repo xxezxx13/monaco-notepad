@@ -68,6 +68,7 @@ vm.runInNewContext(compiled, {
 })
 const {
   decodeTextFile,
+  analyzeEol,
   decodeTextFileWithEncoding,
   detectBomlessUtf16,
   encodeTextFile,
@@ -91,6 +92,24 @@ async function temporaryDirectory(t) {
   t.after(() => rm(directory, { recursive: true, force: true }))
   return directory
 }
+
+test('EOL analysis counts CRLF before standalone LF and CR', () => {
+  const cases = [
+    ['one\r\ntwo\r\nthree', 'CRLF', 2, 0, 0],
+    ['one\ntwo\nthree', 'LF', 0, 2, 0],
+    ['one\rtwo\rthree', 'CR', 0, 0, 2],
+    ['one\r\ntwo\nthree\rfour', 'Mixed', 1, 1, 1],
+    ['no line endings', 'LF', 0, 0, 0]
+  ]
+
+  for (const [text, kind, crlf, lf, cr] of cases) {
+    const actual = analyzeEol(text)
+    assert.equal(actual.kind, kind)
+    assert.equal(actual.counts.crlf, crlf)
+    assert.equal(actual.counts.lf, lf)
+    assert.equal(actual.counts.cr, cr)
+  }
+})
 
 test('all five encodings round-trip Unicode/ANSI text and CRLF', () => {
   const text = 'café résumé £ € “quotes” —\r\nsecond line\r\n'
@@ -356,6 +375,10 @@ test('large-file Cancel reads no content; Open reads the complete file', async (
   const opened = await openFilePath(file, 'auto', parentWindow)
   assert.equal(opened.text, text)
   assert.equal(opened.eol, 'CRLF')
+  assert.equal(opened.sourceEol.kind, 'CRLF')
+  assert.equal(opened.sourceEol.counts.crlf, 1)
+  assert.equal(opened.sourceEol.counts.lf, 0)
+  assert.equal(opened.sourceEol.counts.cr, 0)
   assert.equal(opened.encoding, 'utf8')
   assert.equal(opened.readOnly, false)
   assert.equal(opened.forcedReadOnly, false)
@@ -371,6 +394,10 @@ test('small files open without warning; directories cannot be opened as files', 
   const opened = await openFilePath(file)
   assert.equal(opened.text, 'café')
   assert.equal(opened.encoding, 'windows1252')
+  assert.equal(opened.sourceEol.kind, 'LF')
+  assert.equal(opened.sourceEol.counts.crlf, 0)
+  assert.equal(opened.sourceEol.counts.lf, 0)
+  assert.equal(opened.sourceEol.counts.cr, 0)
   assert.equal(opened.forcedReadOnly, false)
   assert.equal(dialogCalls.length, 0)
   await assert.rejects(openFilePath(dirname(file)), /regular files/)

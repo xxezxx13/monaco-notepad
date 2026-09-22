@@ -4,11 +4,21 @@ import type { Preferences, FilePosition } from '../main/preferences'
 type FileEncoding = 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' | 'windows1252'
 type BomlessFileEncoding = 'auto' | 'utf8' | 'windows1252'
 
+type FileEolInfo = {
+  kind: 'LF' | 'CRLF' | 'CR' | 'Mixed'
+  counts: {
+    crlf: number
+    lf: number
+    cr: number
+  }
+}
+
 type OpenFileResult = {
   filePath: string
   text: string
   encoding: FileEncoding
   eol: 'LF' | 'CRLF'
+  sourceEol: FileEolInfo
   readOnly: boolean
   forcedReadOnly: boolean
   size: number
@@ -60,6 +70,8 @@ type RecoveryData = {
   text: string
   encoding: FileEncoding
   eol: 'LF' | 'CRLF'
+  sourceEol?: FileEolInfo | null
+  eolNormalizationTarget?: 'LF' | 'CRLF' | null
   position?: { line: number; column: number; scrollTop: number; languageOverride?: string }
 }
 
@@ -229,7 +241,11 @@ const api = {
 
   showFileProperties: (
     filePath: string,
-    document: { encoding: FileEncoding; eol: 'LF' | 'CRLF'; language: string }
+    document: {
+      encoding: FileEncoding
+      eol: 'LF' | 'CRLF' | 'CR' | 'Mixed EOL'
+      language: string
+    }
   ): Promise<void> => ipcRenderer.invoke('file:properties', filePath, document),
 
   showSha256: (filePath: string, dirty: boolean): Promise<void> =>

@@ -431,6 +431,131 @@ async function run() {
     'PASS Reopen With Encoding explicit reinterpretation, clean state, dirty Cancel, and dirty Discard'
   )
 
+  const mixedEolPath = path.join(temporary, 'mixed-eol.txt')
+  const mixedEolOriginal = 'one\r\ntwo\nthree\rfour'
+  await fs.writeFile(mixedEolPath, mixedEolOriginal, 'utf8')
+
+  openPath = mixedEolPath
+  response = 0
+  await click('Open...')
+  await until(
+    `document.title === 'mixed-eol.txt - Monaco Notepad' && document.getElementById('eol').value === 'Mixed'`,
+    'mixed EOL source status'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\r\n')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  const mixedPropertiesBefore = messages.length
+  await click('File Properties')
+  const mixedProperties = messages
+    .slice(mixedPropertiesBefore)
+    .find((message) => message.title === 'File Properties')
+  assert.ok(mixedProperties)
+  assert.match(mixedProperties.detail, /Line endings: Mixed EOL/)
+
+  await click('Save')
+  assert.equal(await fs.readFile(mixedEolPath, 'utf8'), mixedEolOriginal)
+  assert.match(
+    await evaluate(`document.getElementById('transient-status').innerText`),
+    /Normalize.*Mixed EOL.*LF.*CRLF/i
+  )
+
+  const blockedMixedSaveAs = path.join(temporary, 'mixed-blocked-save-as.txt')
+  savePath = blockedMixedSaveAs
+  await click('Save As...')
+  await assert.rejects(fs.access(blockedMixedSaveAs))
+
+  const blockedMixedCopy = path.join(temporary, 'mixed-blocked-copy.txt')
+  savePath = blockedMixedCopy
+  await click('Save a Copy...')
+  await assert.rejects(fs.access(blockedMixedCopy))
+
+  // A real Monaco EOL conversion must restore the unresolved source state
+  // when undone and restore the normalization intent when redone.
+  await click('Normalize to LF')
+  await until(
+    `document.getElementById('eol').value === 'LF' && document.title.startsWith('*')`,
+    'mixed EOL normalize to LF'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\n')
+
+  await click('Undo')
+  await until(
+    `document.getElementById('eol').value === 'Mixed' && !document.title.startsWith('*')`,
+    'undo mixed EOL normalization'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\r\n')
+
+  await click('Redo')
+  await until(
+    `document.getElementById('eol').value === 'LF' && document.title.startsWith('*')`,
+    'redo mixed EOL normalization'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\n')
+
+  await click('Undo')
+  await until(
+    `document.getElementById('eol').value === 'Mixed' && !document.title.startsWith('*')`,
+    'restore unresolved mixed EOL state'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\r\n')
+
+  // Monaco already chose CRLF internally for this source. Explicit CRLF
+  // normalization therefore has no model edit, but it must still make the
+  // document dirty and permit a deliberate normalized save.
+  await click('Normalize to CRLF')
+  await until(
+    `document.getElementById('eol').value === 'CRLF' && document.title.startsWith('*')`,
+    'same-model mixed EOL normalization intent'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\r\n')
+
+  // Ordinary content Undo must not discard a metadata-only normalization.
+  const sameModelNormalizedText = await evaluate(`editor.getValue()`)
+  await evaluate(
+    `editor.executeEdits('runtime-eol', [{
+      range: new monaco.Range(1, 1, 1, 1),
+      text: 'X'
+    }])`
+  )
+  await click('Undo')
+  await until(
+    `editor.getValue() === ${JSON.stringify(sameModelNormalizedText)}`,
+    'undo text edit after same-model EOL normalization'
+  )
+  assert.equal(await evaluate(`document.getElementById('eol').value`), 'CRLF')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+
+  await click('Save')
+  await until(`!document.title.startsWith('*')`, 'normalized mixed EOL save')
+  assert.equal(await fs.readFile(mixedEolPath, 'utf8'), 'one\r\ntwo\r\nthree\r\nfour')
+
+  const crEolPath = path.join(temporary, 'cr-eol.txt')
+  await fs.writeFile(crEolPath, 'one\rtwo\rthree', 'utf8')
+
+  openPath = crEolPath
+  response = 0
+  await click('Open...')
+  await until(
+    `document.title === 'cr-eol.txt - Monaco Notepad' && document.getElementById('eol').value === 'CR'`,
+    'CR source status'
+  )
+  assert.equal(await evaluate(`editor.getModel().getEOL()`), '\n')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  await click('Normalize to LF')
+  await until(
+    `document.getElementById('eol').value === 'LF' && document.title.startsWith('*')`,
+    'same-model CR normalization intent'
+  )
+  await click('Save')
+  await until(`!document.title.startsWith('*')`, 'normalized CR save')
+  assert.equal(await fs.readFile(crEolPath, 'utf8'), 'one\ntwo\nthree')
+
+  console.log(
+    'PASS mixed/CR EOL status, guarded saves, explicit same-model normalization, and normalized writes'
+  )
+
   const safeOpenPath = path.join(temporary, 'binary.dat')
 
   const safeOpenCopyPath = path.join(temporary, 'binary-copy.txt')
@@ -598,6 +723,28 @@ async function run() {
   const fileChangeMessagesBeforeFollow = messages.filter((m) => m.title === 'File Changed').length
   await fs.appendFile(followedPath, 'followed 😀\n')
   await until(`editor.getValue().endsWith('followed 😀\\n')`, 'incremental followed append')
+
+  // Complete one CRLF across two independent Follow polling events.
+  // The source accounting must merge CR + LF into one CRLF and Monaco
+  // must retain exactly one line break.
+  await fs.appendFile(followedPath, 'split boundary\r')
+  await until(`editor.getValue().endsWith('split boundary\\n')`, 'follow trailing CR append')
+
+  assert.equal(await evaluate(`document.getElementById('eol').value`), 'Mixed')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  const splitBoundaryLineCount = await evaluate(`editor.getModel().getLineCount()`)
+
+  await fs.appendFile(followedPath, '\ncontinued')
+  await until(
+    `editor.getValue().endsWith('split boundary\\ncontinued')`,
+    'follow split CRLF completion'
+  )
+
+  assert.equal(await evaluate(`editor.getModel().getLineCount()`), splitBoundaryLineCount)
+  assert.equal(await evaluate(`document.getElementById('eol').value`), 'Mixed')
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
   assert.equal(await evaluate(`document.title.startsWith('*')`), false)
   assert.equal(
     messages.filter((m) => m.title === 'File Changed').length,

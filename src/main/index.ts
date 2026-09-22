@@ -124,11 +124,22 @@ function queryPortalTheme(): void {
   }
 }
 
+type RecoveryEolInfo = {
+  kind: 'LF' | 'CRLF' | 'CR' | 'Mixed'
+  counts: {
+    crlf: number
+    lf: number
+    cr: number
+  }
+}
+
 type RecoveryData = {
   filePath: string | null
   text: string
   encoding: FileEncoding
   eol: 'LF' | 'CRLF'
+  sourceEol?: RecoveryEolInfo | null
+  eolNormalizationTarget?: 'LF' | 'CRLF' | null
   position?: { line: number; column: number; scrollTop: number; languageOverride?: string }
 }
 
@@ -145,6 +156,27 @@ async function clearRecovery(): Promise<void> {
   }
 }
 
+function isRecoveryEolInfo(value: unknown): value is RecoveryEolInfo {
+  if (!value || typeof value !== 'object') return false
+
+  const info = value as Partial<RecoveryEolInfo>
+  const counts = info.counts as Partial<RecoveryEolInfo['counts']> | undefined
+
+  return (
+    ['LF', 'CRLF', 'CR', 'Mixed'].includes(info.kind ?? '') &&
+    counts !== undefined &&
+    typeof counts.crlf === 'number' &&
+    Number.isInteger(counts.crlf) &&
+    counts.crlf >= 0 &&
+    typeof counts.lf === 'number' &&
+    Number.isInteger(counts.lf) &&
+    counts.lf >= 0 &&
+    typeof counts.cr === 'number' &&
+    Number.isInteger(counts.cr) &&
+    counts.cr >= 0
+  )
+}
+
 function isRecoveryData(value: unknown): value is RecoveryData {
   if (!value || typeof value !== 'object') return false
   const data = value as Partial<RecoveryData>
@@ -153,6 +185,13 @@ function isRecoveryData(value: unknown): value is RecoveryData {
     typeof data.text === 'string' &&
     ['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252'].includes(data.encoding ?? '') &&
     (data.eol === 'LF' || data.eol === 'CRLF') &&
+    (data.sourceEol === undefined ||
+      data.sourceEol === null ||
+      isRecoveryEolInfo(data.sourceEol)) &&
+    (data.eolNormalizationTarget === undefined ||
+      data.eolNormalizationTarget === null ||
+      data.eolNormalizationTarget === 'LF' ||
+      data.eolNormalizationTarget === 'CRLF') &&
     (data.position === undefined ||
       (typeof data.position === 'object' &&
         data.position !== null &&

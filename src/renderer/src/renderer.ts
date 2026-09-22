@@ -842,6 +842,14 @@ async function enterFollowMode(): Promise<void> {
     }
   }
 
+  if (
+    !documentState.sourceEol ||
+    documentState.sourceEol.kind === 'LF' ||
+    documentState.sourceEol.kind === 'CRLF'
+  ) {
+    followSourceEndsWithCr = false
+  }
+
   try {
     const result = await window.api.startFollow(filePath, documentState.encoding)
     voluntaryReadOnlyBeforeFollow = documentState.voluntaryReadOnly
@@ -996,6 +1004,135 @@ function updateTitle(): void {
   document.title = `${dirty ? '*' : ''}${getDocumentName()} - Monaco Notepad`
 }
 
+const eolNormalizationHistory = new Map<number, typeof documentState.eol | null>()
+let eolNormalizationUndoTracked = false
+
+function resetEolNormalizationHistory(): void {
+  eolNormalizationHistory.clear()
+  eolNormalizationHistory.set(model.getAlternativeVersionId(), documentState.eolNormalizationTarget)
+  eolNormalizationUndoTracked = false
+}
+
+function sourceEolRequiresNormalization(): boolean {
+  return documentState.sourceEol?.kind === 'CR' || documentState.sourceEol?.kind === 'Mixed'
+}
+
+function statusEolValue(): typeof documentState.eol | 'CR' | 'Mixed' {
+  if (sourceEolRequiresNormalization() && documentState.eolNormalizationTarget === null) {
+    return documentState.sourceEol!.kind
+  }
+
+  return documentState.eol
+}
+
+function filePropertiesEolLabel(): 'LF' | 'CRLF' | 'CR' | 'Mixed EOL' {
+  const value = statusEolValue()
+  return value === 'Mixed' ? 'Mixed EOL' : value
+}
+
+let followSourceEndsWithCr = false
+
+function sourceEolFromCounts(
+  crlf: number,
+  lf: number,
+  cr: number
+): NonNullable<typeof documentState.sourceEol> {
+  const forms = Number(crlf > 0) + Number(lf > 0) + Number(cr > 0)
+  const kind = forms > 1 ? 'Mixed' : crlf > 0 ? 'CRLF' : cr > 0 ? 'CR' : 'LF'
+
+  return {
+    kind,
+    counts: { crlf, lf, cr }
+  }
+}
+
+function analyzeSourceEolText(text: string): NonNullable<typeof documentState.sourceEol> {
+  let crlf = 0
+  let lf = 0
+  let cr = 0
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]
+
+    if (character === '\r') {
+      if (text[index + 1] === '\n') {
+        crlf++
+        index++
+      } else {
+        cr++
+      }
+    } else if (character === '\n') {
+      lf++
+    }
+  }
+
+  return sourceEolFromCounts(crlf, lf, cr)
+}
+
+function appendFollowSourceText(text: string): string {
+  if (!documentState.sourceEol) {
+    documentState.sourceEol = analyzeSourceEolText(text)
+    followSourceEndsWithCr = text.endsWith('\r')
+    return text
+  }
+
+  const previousEndsWithCr = followSourceEndsWithCr
+  const addition = analyzeSourceEolText(text)
+
+  let crlf = documentState.sourceEol.counts.crlf + addition.counts.crlf
+  let lf = documentState.sourceEol.counts.lf + addition.counts.lf
+  let cr = documentState.sourceEol.counts.cr + addition.counts.cr
+
+  const joinsPreviousCr =
+    previousEndsWithCr &&
+    text.startsWith('\n') &&
+    documentState.sourceEol.counts.cr > 0 &&
+    addition.counts.lf > 0
+
+  if (joinsPreviousCr) {
+    cr--
+    lf--
+    crlf++
+  }
+
+  documentState.sourceEol = sourceEolFromCounts(crlf, lf, cr)
+
+  if (text.length > 0) {
+    followSourceEndsWithCr = text.endsWith('\r')
+  }
+
+  // Monaco already rendered the previous trailing CR as one line break.
+  // When the next poll begins with LF, that LF completes the same CRLF
+  // on disk and must not create a second model line.
+  return joinsPreviousCr ? text.slice(1) : text
+}
+
+function uniformSourceEol(
+  eol: typeof documentState.eol,
+  text: string
+): NonNullable<typeof documentState.sourceEol> {
+  const lineEndings = text.split('\n').length - 1
+
+  return {
+    kind: eol,
+    counts: {
+      crlf: eol === 'CRLF' ? lineEndings : 0,
+      lf: eol === 'LF' ? lineEndings : 0,
+      cr: 0
+    }
+  }
+}
+
+function ensureEolReadyForSave(): boolean {
+  if (!sourceEolRequiresNormalization() || documentState.eolNormalizationTarget !== null) {
+    return true
+  }
+
+  const sourceLabel = documentState.sourceEol?.kind === 'Mixed' ? 'Mixed EOL' : 'CR'
+  showTransientStatus(`Normalize this ${sourceLabel} document to LF or CRLF before saving.`, true)
+  return false
+}
+
 function updateStatusBar(): void {
   const position = editor.getPosition()
   const line = position?.lineNumber ?? 1
@@ -1003,7 +1140,7 @@ function updateStatusBar(): void {
 
   positionStatus.textContent = `Ln ${line}, Col ${column}`
   encodingStatus.value = documentState.encoding
-  eolStatus.value = documentState.eol
+  eolStatus.value = statusEolValue()
   languageStatus.value = documentState.languageOverride ?? 'auto'
   readOnlyStatus.hidden = !(
     documentState.readOnly ||
@@ -1046,6 +1183,8 @@ function scheduleRecovery(): void {
       text: model.getValue(),
       encoding: documentState.encoding,
       eol: documentState.eol,
+      sourceEol: documentState.sourceEol,
+      eolNormalizationTarget: documentState.eolNormalizationTarget,
       position: documentState.filePath ? undefined : capturePosition()
     })
   }, 500)
@@ -1096,7 +1235,10 @@ async function newDocument(): Promise<void> {
   documentState.encoding = defaultNewDocumentEncoding
   documentState.savedEncoding = defaultNewDocumentEncoding
   documentState.eol = defaultNewDocumentEol
+  documentState.sourceEol = null
+  documentState.eolNormalizationTarget = null
   documentState.savedVersionId = model.getAlternativeVersionId()
+  resetEolNormalizationHistory()
   documentState.readOnly = false
   documentState.voluntaryReadOnly = false
   documentState.forcedReadOnly = false
@@ -1131,7 +1273,11 @@ function loadDocument(result: NonNullable<Awaited<ReturnType<typeof window.api.o
   documentState.encoding = result.encoding
   documentState.savedEncoding = result.encoding
   documentState.eol = result.eol
+  documentState.sourceEol = result.sourceEol
+  followSourceEndsWithCr = result.text.endsWith('\r')
+  documentState.eolNormalizationTarget = null
   documentState.savedVersionId = model.getAlternativeVersionId()
+  resetEolNormalizationHistory()
   documentState.readOnly = result.readOnly
   documentState.voluntaryReadOnly = false
   documentState.forcedReadOnly = result.forcedReadOnly
@@ -1251,6 +1397,8 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
     return false
   }
 
+  if (!ensureEolReadyForSave()) return false
+
   if (editorPreferences.trimTrailingWhitespaceOnSave) {
     executeReplacement(
       wholeDocumentRange(),
@@ -1261,9 +1409,13 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
   const generation = documentGeneration
   const savedVersionId = model.getAlternativeVersionId()
   const savedEncoding = documentState.encoding
+  const savedEol = documentState.eol
+  const savedText = model.getValue()
+  const savedSourceEol = uniformSourceEol(savedEol, savedText)
+
   const result = await window.api.saveFile({
     filePath: saveAs ? null : documentState.filePath,
-    text: model.getValue(),
+    text: savedText,
     encoding: savedEncoding,
     baselineCheck: !overwrite,
     protectedPath: documentState.protectedPath
@@ -1301,6 +1453,9 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
   // Only the snapshot actually sent to the main process is now saved.
   documentState.savedEncoding = savedEncoding
   documentState.savedVersionId = savedVersionId
+  documentState.sourceEol = savedSourceEol
+  documentState.eolNormalizationTarget = null
+  resetEolNormalizationHistory()
   documentState.fileSize = await window.api.getFileSize(filePath)
 
   if (!documentState.languageOverride) {
@@ -1321,6 +1476,11 @@ async function saveDocumentAs(): Promise<boolean> {
 }
 
 async function saveCopy(): Promise<void> {
+  if (!ensureEolReadyForSave()) {
+    editor.focus()
+    return
+  }
+
   await window.api.saveCopy({
     filePath: null,
     text: model.getValue(),
@@ -1367,6 +1527,17 @@ function removeFinalNewline(): void {
 
 model.onDidChangeContent(() => {
   documentState.eol = model.getEOL() === '\r\n' ? 'CRLF' : 'LF'
+
+  if (sourceEolRequiresNormalization() && eolNormalizationUndoTracked) {
+    const versionId = model.getAlternativeVersionId()
+
+    if (eolNormalizationHistory.has(versionId)) {
+      documentState.eolNormalizationTarget = eolNormalizationHistory.get(versionId) ?? null
+    } else {
+      eolNormalizationHistory.set(versionId, documentState.eolNormalizationTarget)
+    }
+  }
+
   updateTitle()
   updateStatusBar()
   if (!followApplying) {
@@ -1418,13 +1589,50 @@ function setEncoding(encoding: typeof documentState.encoding): void {
 }
 
 function setEol(eol: typeof documentState.eol): void {
-  if (eol === documentState.eol) return
-  model.setEOL(
+  const sourceNeedsNormalization = sourceEolRequiresNormalization()
+
+  if (eol === documentState.eol) {
+    if (!sourceNeedsNormalization || documentState.eolNormalizationTarget === eol) {
+      return
+    }
+
+    // Monaco has no model edit when the requested EOL already matches
+    // its uniform representation. Keep this as deliberate metadata,
+    // not a fabricated editor undo step.
+    documentState.eolNormalizationTarget = eol
+    resetEolNormalizationHistory()
+
+    updateTitle()
+    updateStatusBar()
+    scheduleRecovery()
+    editor.focus()
+    return
+  }
+
+  if (sourceNeedsNormalization) {
+    eolNormalizationHistory.set(
+      model.getAlternativeVersionId(),
+      documentState.eolNormalizationTarget
+    )
+    documentState.eolNormalizationTarget = eol
+    eolNormalizationUndoTracked = true
+  }
+
+  model.pushEOL(
     eol === 'CRLF' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF
   )
   documentState.eol = eol
+
+  if (sourceNeedsNormalization) {
+    eolNormalizationHistory.set(
+      model.getAlternativeVersionId(),
+      documentState.eolNormalizationTarget
+    )
+  }
+
   updateTitle()
   updateStatusBar()
+  scheduleRecovery()
   editor.focus()
 }
 
@@ -1470,6 +1678,9 @@ window.api.onFollowUpdate((update) => {
   followApplying = true
   try {
     if (update.kind === 'reset') {
+      documentState.sourceEol = analyzeSourceEolText(update.text)
+      followSourceEndsWithCr = update.text.endsWith('\r')
+      documentState.eolNormalizationTarget = null
       model.setValue(update.text)
       const message =
         update.reason === 'truncated'
@@ -1479,14 +1690,20 @@ window.api.onFollowUpdate((update) => {
             : 'File recreated; follow restarted'
       showTransientStatus(message)
     } else if (update.text) {
+      const modelText = appendFollowSourceText(update.text)
       const line = model.getLineCount()
       const column = model.getLineMaxColumn(line)
-      model.applyEdits([
-        {
-          range: new monaco.Range(line, column, line, column),
-          text: update.text
-        }
-      ])
+
+      if (modelText) {
+        model.applyEdits([
+          {
+            range: new monaco.Range(line, column, line, column),
+            text: modelText
+          }
+        ])
+      }
+
+      documentState.eolNormalizationTarget = null
     }
   } finally {
     followApplying = false
@@ -1494,6 +1711,7 @@ window.api.onFollowUpdate((update) => {
   documentState.savedVersionId = model.getAlternativeVersionId()
   documentState.fileSize = update.to
   documentState.eol = model.getEOL() === '\r\n' ? 'CRLF' : 'LF'
+  resetEolNormalizationHistory()
   updateTitle()
   updateStatusBar()
   if (followAutoScroll) {
@@ -1573,6 +1791,8 @@ window.api.onCloseRequested(() => {
         text: model.getValue(),
         encoding: documentState.encoding,
         eol: documentState.eol,
+        sourceEol: documentState.sourceEol,
+        eolNormalizationTarget: documentState.eolNormalizationTarget,
         position: capturePosition()
       })
       await window.api.approveClose()
@@ -1701,7 +1921,7 @@ window.api.onMenuCommand((command) => {
       if (documentState.filePath)
         void window.api.showFileProperties(documentState.filePath, {
           encoding: documentState.encoding,
-          eol: documentState.eol,
+          eol: filePropertiesEolLabel(),
           language: model.getLanguageId()
         })
       break
@@ -2058,7 +2278,15 @@ runDocumentAction(async () => {
     documentState.encoding = recovery.encoding
     documentState.savedEncoding = recovery.encoding
     documentState.eol = recovery.eol
+    documentState.sourceEol =
+      recovery.sourceEol ??
+      (recovery.filePath ? uniformSourceEol(recovery.eol, recovery.text) : null)
+    documentState.eolNormalizationTarget =
+      documentState.sourceEol?.kind === 'CR' || documentState.sourceEol?.kind === 'Mixed'
+        ? (recovery.eolNormalizationTarget ?? null)
+        : null
     documentState.savedVersionId = 0
+    resetEolNormalizationHistory()
     void window.api.watchFile(recovery.filePath)
     await refreshReadOnly()
     if (recovery.position) {

@@ -55,6 +55,15 @@ async function run() {
         text: mode === 'scratchpad' ? 'persistent scratchpad' : 'recovered document',
         encoding: 'utf8',
         eol: 'LF',
+        ...(mode === 'recovery'
+          ? {
+              sourceEol: {
+                kind: 'Mixed',
+                counts: { crlf: 1, lf: 1, cr: 1 }
+              },
+              eolNormalizationTarget: null
+            }
+          : {}),
         ...(mode === 'scratchpad'
           ? { position: { line: 1, column: 4, scrollTop: 0, languageOverride: 'markdown' } }
           : {})
@@ -116,6 +125,10 @@ async function run() {
     `window.editor?.getValue() === ${JSON.stringify(expected)}`,
     `${mode} startup`
   )
+  if (mode === 'recovery') {
+    assert.equal(await evaluate(window, `document.getElementById('eol').value`), 'Mixed')
+  }
+
   if (mode === 'explicit') {
     assert.equal(
       messages.some((message) => message.title === 'Recover Document'),
