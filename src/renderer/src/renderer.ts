@@ -70,6 +70,12 @@ import {
   minifyJson,
   type TextTransform
 } from './transforms'
+import {
+  replaceLineFilterTail,
+  scanLineFilter,
+  type LineFilterOptions,
+  type LineFilterResult
+} from './line-filter'
 
 self.MonacoEnvironment = {
   getWorker() {
@@ -248,6 +254,32 @@ const fileSizeElement = document.getElementById('file-size')
 const finalNewlineElement = document.getElementById('final-newline')
 const followStatusElement = document.getElementById('follow-status')
 const transientStatusElement = document.getElementById('transient-status')
+const lineFilterElement = document.getElementById('line-filter') as HTMLElement | null
+const lineFilterQueryElement = document.getElementById(
+  'line-filter-query'
+) as HTMLInputElement | null
+const lineFilterRegexElement = document.getElementById(
+  'line-filter-regex'
+) as HTMLInputElement | null
+const lineFilterCaseElement = document.getElementById('line-filter-case') as HTMLInputElement | null
+const lineFilterInvertElement = document.getElementById(
+  'line-filter-invert'
+) as HTMLInputElement | null
+const lineFilterCopyMatchingElement = document.getElementById(
+  'line-filter-copy-matching'
+) as HTMLButtonElement | null
+const lineFilterCopyNonmatchingElement = document.getElementById(
+  'line-filter-copy-nonmatching'
+) as HTMLButtonElement | null
+const lineFilterCloseElement = document.getElementById(
+  'line-filter-close'
+) as HTMLButtonElement | null
+const lineFilterSummaryElement = document.getElementById(
+  'line-filter-summary'
+) as HTMLDivElement | null
+const lineFilterResultsElement = document.getElementById(
+  'line-filter-results'
+) as HTMLDivElement | null
 
 if (!container) {
   throw new Error('Editor container not found')
@@ -283,6 +315,7 @@ const keyboardShortcuts = [
   { label: 'Save', accelerator: 'Ctrl+S' },
   { label: 'Save As', accelerator: 'Ctrl+Shift+S' },
   { label: 'Print', accelerator: 'Ctrl+P' },
+  { label: 'Filter Lines', accelerator: 'Ctrl+Shift+F' },
   { label: 'Find', accelerator: 'Ctrl+F' },
   { label: 'Replace', accelerator: 'Ctrl+H' },
   { label: 'Go To', accelerator: 'Ctrl+G' },
@@ -331,6 +364,32 @@ const compareClose = document.getElementById('compare-close') as HTMLButtonEleme
 const compareKeep = document.getElementById('compare-keep') as HTMLButtonElement | null
 const compareReload = document.getElementById('compare-reload') as HTMLButtonElement | null
 const compareStatus = document.getElementById('compare-status') as HTMLSpanElement | null
+
+if (
+  !lineFilterElement ||
+  !lineFilterQueryElement ||
+  !lineFilterRegexElement ||
+  !lineFilterCaseElement ||
+  !lineFilterInvertElement ||
+  !lineFilterCopyMatchingElement ||
+  !lineFilterCopyNonmatchingElement ||
+  !lineFilterCloseElement ||
+  !lineFilterSummaryElement ||
+  !lineFilterResultsElement
+) {
+  throw new Error('Line filter UI not found')
+}
+
+const lineFilter = lineFilterElement
+const lineFilterQuery = lineFilterQueryElement
+const lineFilterRegex = lineFilterRegexElement
+const lineFilterCase = lineFilterCaseElement
+const lineFilterInvert = lineFilterInvertElement
+const lineFilterCopyMatching = lineFilterCopyMatchingElement
+const lineFilterCopyNonmatching = lineFilterCopyNonmatchingElement
+const lineFilterClose = lineFilterCloseElement
+const lineFilterSummary = lineFilterSummaryElement
+const lineFilterResults = lineFilterResultsElement
 
 if (shortcutsList) {
   keyboardShortcuts.forEach((shortcut) => {
@@ -413,6 +472,10 @@ let followActive = false
 let followApplying = false
 let followAutoScroll = true
 let voluntaryReadOnlyBeforeFollow = false
+let lineFilterTimer: number | null = null
+let lineFilterResult: LineFilterResult | null = null
+let lineFilterOptionsSignature: string | null = null
+const lineFilterRenderLimit = 1000
 const bookmarks = editor.createDecorationsCollection()
 
 function showTransientStatus(message: string, error = false): void {
@@ -426,6 +489,211 @@ function showTransientStatus(message: string, error = false): void {
     transientStatusTimer = null
   }, 3500)
 }
+
+function currentLineFilterOptions(invert = lineFilterInvert.checked): LineFilterOptions {
+  return {
+    query: lineFilterQuery.value,
+    mode: lineFilterRegex.checked ? 'regex' : 'literal',
+    caseSensitive: lineFilterCase.checked,
+    invert
+  }
+}
+
+function lineFilterSignature(options: LineFilterOptions): string {
+  return JSON.stringify([options.query, options.mode, options.caseSensitive, options.invert])
+}
+
+function clearLineFilterResults(): void {
+  lineFilterResults.replaceChildren()
+}
+
+function displayLineFilterResult(result: LineFilterResult): void {
+  clearLineFilterResults()
+  lineFilterSummary.classList.toggle('status-error', result.error !== null)
+
+  if (result.error) {
+    lineFilterSummary.textContent = `Invalid regular expression: ${result.error}`
+    return
+  }
+
+  if (!result.active) {
+    lineFilterSummary.textContent = 'Enter filter text'
+    return
+  }
+
+  const selectedKind = lineFilterInvert.checked ? 'non-matching' : 'matching'
+  const rendered = Math.min(result.lines.length, lineFilterRenderLimit)
+
+  lineFilterSummary.textContent =
+    `${result.matchCount} ${result.matchCount === 1 ? 'match' : 'matches'} on ` +
+    `${result.matchingLineCount} ${result.matchingLineCount === 1 ? 'line' : 'lines'} · ` +
+    `${result.selectedLineCount} ${selectedKind} ${result.selectedLineCount === 1 ? 'line' : 'lines'}` +
+    (result.lines.length > rendered ? ` · showing first ${rendered}` : '')
+
+  const fragment = document.createDocumentFragment()
+
+  for (const line of result.lines.slice(0, lineFilterRenderLimit)) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'line-filter-result'
+    button.setAttribute('role', 'listitem')
+    button.title = `Go to line ${line.lineNumber}`
+
+    const number = document.createElement('span')
+    number.className = 'line-filter-line-number'
+    number.textContent = String(line.lineNumber)
+
+    const content = document.createElement('span')
+    content.className = 'line-filter-line-text'
+    content.textContent = line.text
+
+    button.append(number, content)
+    button.addEventListener('click', () => {
+      const lineNumber = Math.min(line.lineNumber, model.getLineCount())
+      editor.setPosition({ lineNumber, column: 1 })
+      editor.revealLineInCenter(lineNumber)
+      editor.focus()
+    })
+
+    fragment.appendChild(button)
+  }
+
+  lineFilterResults.appendChild(fragment)
+}
+
+function renderLineFilter(): void {
+  if (lineFilterTimer !== null) {
+    window.clearTimeout(lineFilterTimer)
+    lineFilterTimer = null
+  }
+
+  const options = currentLineFilterOptions()
+  const result = scanLineFilter(model.getValue(), options)
+
+  lineFilterResult = result
+  lineFilterOptionsSignature = lineFilterSignature(options)
+  displayLineFilterResult(result)
+}
+
+function updateLineFilterForFollowAppend(startLineNumber: number, oldTailText: string): void {
+  if (lineFilter.hidden) return
+
+  const options = currentLineFilterOptions()
+  const signature = lineFilterSignature(options)
+
+  if (!lineFilterResult || lineFilterOptionsSignature !== signature) {
+    renderLineFilter()
+    return
+  }
+
+  if (!lineFilterResult.active || lineFilterResult.error) {
+    return
+  }
+
+  const lastLine = model.getLineCount()
+  const newTailText = model.getValueInRange(
+    new monaco.Range(startLineNumber, 1, lastLine, model.getLineMaxColumn(lastLine))
+  )
+
+  lineFilterResult = replaceLineFilterTail(
+    lineFilterResult,
+    oldTailText,
+    newTailText,
+    startLineNumber,
+    options
+  )
+
+  displayLineFilterResult(lineFilterResult)
+}
+
+function queueLineFilterRefresh(delay?: number): void {
+  if (lineFilter.hidden) return
+
+  if (lineFilterTimer !== null) {
+    window.clearTimeout(lineFilterTimer)
+  }
+
+  const wait = delay ?? (documentState.largeFileMode ? 300 : 120)
+  lineFilterTimer = window.setTimeout(renderLineFilter, wait)
+}
+
+function openLineFilter(): void {
+  if (compareView && !compareView.hidden) closeCompare()
+
+  lineFilter.hidden = false
+  renderLineFilter()
+  lineFilterQuery.focus()
+  lineFilterQuery.select()
+}
+
+function closeLineFilter(): void {
+  if (lineFilterTimer !== null) {
+    window.clearTimeout(lineFilterTimer)
+    lineFilterTimer = null
+  }
+
+  lineFilter.hidden = true
+  editor.focus()
+}
+
+async function copyLineFilterSelection(invert: boolean): Promise<void> {
+  const result = scanLineFilter(model.getValue(), currentLineFilterOptions(invert))
+
+  if (result.error) {
+    showTransientStatus(`Invalid regular expression: ${result.error}`, true)
+    return
+  }
+
+  if (!result.active) {
+    showTransientStatus('Enter filter text before copying lines', true)
+    return
+  }
+
+  if (result.lines.length === 0) {
+    showTransientStatus(invert ? 'No non-matching lines to copy' : 'No matching lines to copy')
+    return
+  }
+
+  await window.api.writeClipboardText(result.lines.map((line) => line.text).join(model.getEOL()))
+
+  showTransientStatus(
+    `${result.lines.length} ${invert ? 'non-matching' : 'matching'} ` +
+      `${result.lines.length === 1 ? 'line' : 'lines'} copied`
+  )
+}
+
+lineFilterQuery.addEventListener('input', () => {
+  queueLineFilterRefresh()
+})
+
+for (const control of [lineFilterRegex, lineFilterCase, lineFilterInvert]) {
+  control.addEventListener('change', () => {
+    queueLineFilterRefresh(0)
+  })
+}
+
+lineFilterCopyMatching.addEventListener('click', () => {
+  void copyLineFilterSelection(false)
+})
+
+lineFilterCopyNonmatching.addEventListener('click', () => {
+  void copyLineFilterSelection(true)
+})
+
+lineFilterClose.addEventListener('click', closeLineFilter)
+
+lineFilter.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeLineFilter()
+  }
+})
+
+model.onDidChangeContent(() => {
+  if (!followApplying) {
+    queueLineFilterRefresh()
+  }
+})
 
 function syncFollowMenu(): void {
   void window.api.setFollowMenuState(followActive, followActive || documentState.filePath !== null)
@@ -1682,6 +1950,7 @@ window.api.onFollowUpdate((update) => {
       followSourceEndsWithCr = update.text.endsWith('\r')
       documentState.eolNormalizationTarget = null
       model.setValue(update.text)
+      if (!lineFilter.hidden) renderLineFilter()
       const message =
         update.reason === 'truncated'
           ? 'File truncated; follow restarted'
@@ -1692,6 +1961,7 @@ window.api.onFollowUpdate((update) => {
     } else if (update.text) {
       const modelText = appendFollowSourceText(update.text)
       const line = model.getLineCount()
+      const oldTailText = model.getLineContent(line)
       const column = model.getLineMaxColumn(line)
 
       if (modelText) {
@@ -1701,6 +1971,7 @@ window.api.onFollowUpdate((update) => {
             text: modelText
           }
         ])
+        updateLineFilterForFollowAppend(line, oldTailText)
       }
 
       documentState.eolNormalizationTarget = null
@@ -2050,6 +2321,9 @@ window.api.onMenuCommand((command) => {
     case 'bookmark-clear':
       bookmarks.clear()
       editor.focus()
+      break
+    case 'filter-lines':
+      openLineFilter()
       break
     case 'find':
       editor.trigger('menu', 'actions.find', null)

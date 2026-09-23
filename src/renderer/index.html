@@ -12,6 +12,38 @@
   <body>
     <div id="app">
       <div id="editor"></div>
+      <section id="line-filter" aria-label="Filter Lines" hidden>
+        <div id="line-filter-controls">
+          <strong>Filter Lines</strong>
+          <input
+            id="line-filter-query"
+            type="text"
+            placeholder="Text or pattern"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Filter text or pattern"
+          />
+          <label class="line-filter-option">
+            <input id="line-filter-regex" type="checkbox" />
+            Regex
+          </label>
+          <label class="line-filter-option">
+            <input id="line-filter-case" type="checkbox" />
+            Case sensitive
+          </label>
+          <label class="line-filter-option">
+            <input id="line-filter-invert" type="checkbox" />
+            Invert
+          </label>
+          <button type="button" id="line-filter-copy-matching">Copy Matching</button>
+          <button type="button" id="line-filter-copy-nonmatching">Copy Non-Matching</button>
+          <button type="button" id="line-filter-close" aria-label="Close Filter Lines">
+            Close
+          </button>
+        </div>
+        <div id="line-filter-summary" role="status" aria-live="polite">Enter filter text</div>
+        <div id="line-filter-results" role="list" aria-label="Filtered lines"></div>
+      </section>
       <div id="statusbar">
         <span id="position"></span>
         <span id="word-count" title="Words are runs of non-whitespace characters">Words 0</span>

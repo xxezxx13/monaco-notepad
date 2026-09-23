@@ -66,6 +66,28 @@ async function setText(text) {
   await delay(250)
 }
 
+async function setLineFilterControls({
+  query,
+  regex = false,
+  caseSensitive = false,
+  invert = false
+}) {
+  await evaluate(`(() => {
+    const query = document.getElementById('line-filter-query')
+    const regex = document.getElementById('line-filter-regex')
+    const caseSensitive = document.getElementById('line-filter-case')
+    const invert = document.getElementById('line-filter-invert')
+
+    query.value = ${JSON.stringify(query)}
+    regex.checked = ${regex}
+    caseSensitive.checked = ${caseSensitive}
+    invert.checked = ${invert}
+    query.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+
+  await delay(250)
+}
+
 async function press(keyCode, modifiers = []) {
   window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
@@ -696,6 +718,101 @@ async function run() {
     'PASS Safe Open cancel, forced read-only, protected original, Save As unlock, and normal save'
   )
 
+  const filterFixture = 'Alpha alpha\nbeta alpha\nGamma\nalpha42 ALPHA'
+  await setText(filterFixture)
+
+  const filterLinesMenuItem = menuItem('Filter Lines...')
+  assert.ok(filterLinesMenuItem, 'Menu: Filter Lines...')
+  assert.equal(filterLinesMenuItem.accelerator, 'CmdOrCtrl+Shift+F')
+  await click('Filter Lines...')
+  await until(`!document.getElementById('line-filter').hidden`, 'Filter Lines menu command')
+  assert.equal(await evaluate(`document.activeElement?.id`), 'line-filter-query')
+
+  await setLineFilterControls({ query: 'alpha' })
+  await until(
+    `/5 matches on 3 lines/.test(document.getElementById('line-filter-summary').innerText)`,
+    'literal line filter'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 3)
+
+  await setLineFilterControls({
+    query: 'alpha',
+    caseSensitive: true
+  })
+  await until(
+    `/3 matches on 3 lines/.test(document.getElementById('line-filter-summary').innerText)`,
+    'case-sensitive line filter'
+  )
+
+  await setLineFilterControls({
+    query: '^alpha',
+    regex: true,
+    caseSensitive: true
+  })
+  await until(
+    `/1 match on 1 line/.test(document.getElementById('line-filter-summary').innerText)`,
+    'regex line filter'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 1)
+
+  await setLineFilterControls({
+    query: '^alpha',
+    regex: true,
+    caseSensitive: true,
+    invert: true
+  })
+  await until(
+    `/3 non-matching lines/.test(document.getElementById('line-filter-summary').innerText)`,
+    'inverted line filter'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 3)
+
+  await setLineFilterControls({
+    query: '[',
+    regex: true
+  })
+  await until(
+    `/Invalid regular expression/.test(document.getElementById('line-filter-summary').innerText)`,
+    'invalid regex line filter'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 0)
+  assert.equal(await evaluate(`editor.getValue()`), filterFixture)
+
+  await setLineFilterControls({ query: 'Gamma' })
+  await until(
+    `document.querySelectorAll('.line-filter-result').length === 1`,
+    'single filter navigation result'
+  )
+  await evaluate(`document.querySelector('.line-filter-result').click()`)
+  assert.equal(await evaluate(`editor.getPosition().lineNumber`), 3)
+
+  await setLineFilterControls({ query: 'alpha' })
+
+  clipboard.writeText('')
+  await evaluate(`document.getElementById('line-filter-copy-matching').click()`)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText() === 'Alpha alpha\nbeta alpha\nalpha42 ALPHA') break
+    await delay(50)
+  }
+  assert.equal(clipboard.readText(), 'Alpha alpha\nbeta alpha\nalpha42 ALPHA')
+
+  clipboard.writeText('')
+  await evaluate(`document.getElementById('line-filter-copy-nonmatching').click()`)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText() === 'Gamma') break
+    await delay(50)
+  }
+  assert.equal(clipboard.readText(), 'Gamma')
+
+  assert.equal(await evaluate(`editor.getValue()`), filterFixture)
+
+  await evaluate(`document.getElementById('line-filter-close').click()`)
+  await until(`document.getElementById('line-filter').hidden`, 'Filter Lines close')
+
+  console.log(
+    'PASS Filter Lines literal, case, regex, invert, navigation, clipboard, and source preservation'
+  )
+
   const followedPath = path.join(temporary, 'follow.log')
   await fs.writeFile(
     followedPath,
@@ -720,9 +837,49 @@ async function run() {
     `/Following/.test(document.getElementById('follow-status').innerText) && editor.getOption(monaco.editor.EditorOption.readOnly)`,
     'follow mode entry'
   )
+
+  await click('Filter Lines...')
+  await until(`!document.getElementById('line-filter').hidden`, 'Filter Lines during Follow')
+  await setLineFilterControls({ query: 'needle' })
+  await until(
+    `/0 matches on 0 lines/.test(document.getElementById('line-filter-summary').innerText)`,
+    'initial Follow filter state'
+  )
+
   const fileChangeMessagesBeforeFollow = messages.filter((m) => m.title === 'File Changed').length
   await fs.appendFile(followedPath, 'followed 😀\n')
   await until(`editor.getValue().endsWith('followed 😀\\n')`, 'incremental followed append')
+
+  await fs.appendFile(followedPath, 'nee')
+  await until(
+    `editor.getValue().endsWith('followed 😀\\nnee')`,
+    'follow filter incomplete-line append'
+  )
+  assert.match(
+    await evaluate(`document.getElementById('line-filter-summary').innerText`),
+    /0 matches on 0 lines/
+  )
+
+  await fs.appendFile(followedPath, 'dle\n')
+  await until(`editor.getValue().endsWith('needle\\n')`, 'follow filter incomplete-line completion')
+  await until(
+    `/1 match on 1 line/.test(document.getElementById('line-filter-summary').innerText)`,
+    'incremental Follow filter match'
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 1)
+
+  // Match empty logical lines while completing one CRLF across two
+  // independent Follow polls. A split CRLF must never surface a
+  // phantom filtered empty line.
+  await setLineFilterControls({
+    query: '^$',
+    regex: true,
+    caseSensitive: true
+  })
+  await until(
+    `/0 matches on 0 lines/.test(document.getElementById('line-filter-summary').innerText)`,
+    'empty-line filter before split CRLF'
+  )
 
   // Complete one CRLF across two independent Follow polling events.
   // The source accounting must merge CR + LF into one CRLF and Monaco
@@ -732,6 +889,11 @@ async function run() {
 
   assert.equal(await evaluate(`document.getElementById('eol').value`), 'Mixed')
   assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+  assert.match(
+    await evaluate(`document.getElementById('line-filter-summary').innerText`),
+    /0 matches on 0 lines/
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 0)
 
   const splitBoundaryLineCount = await evaluate(`editor.getModel().getLineCount()`)
 
@@ -744,6 +906,17 @@ async function run() {
   assert.equal(await evaluate(`editor.getModel().getLineCount()`), splitBoundaryLineCount)
   assert.equal(await evaluate(`document.getElementById('eol').value`), 'Mixed')
   assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+  assert.match(
+    await evaluate(`document.getElementById('line-filter-summary').innerText`),
+    /0 matches on 0 lines/
+  )
+  assert.equal(await evaluate(`document.querySelectorAll('.line-filter-result').length`), 0)
+
+  await setLineFilterControls({ query: 'needle' })
+  await until(
+    `/1 match on 1 line/.test(document.getElementById('line-filter-summary').innerText)`,
+    'restore Follow needle filter'
+  )
 
   assert.equal(await evaluate(`document.title.startsWith('*')`), false)
   assert.equal(
@@ -765,6 +938,30 @@ async function run() {
   )
   await fs.appendFile(followedPath, 'back at bottom\n')
   await until(`editor.getValue().endsWith('back at bottom\\n')`, 'append after scroll resume')
+  const resetFollowText = 'needle reset line\n'
+
+  await fs.writeFile(followedPath, resetFollowText)
+  await until(
+    `editor.getValue() === ${JSON.stringify('needle reset line\n')}`,
+    'Follow truncation/reset content'
+  )
+  await until(
+    `/1 match on 1 line/.test(document.getElementById('line-filter-summary').innerText)`,
+    'Follow filter rebuild after reset'
+  )
+  assert.deepEqual(
+    await evaluate(
+      `[...document.querySelectorAll('.line-filter-line-text')].map((element) => element.textContent)`
+    ),
+    ['needle reset line']
+  )
+  assert.equal(await evaluate(`document.title.startsWith('*')`), false)
+
+  await evaluate(`document.getElementById('line-filter-close').click()`)
+  await until(`document.getElementById('line-filter').hidden`, 'close Follow line filter')
+
+  console.log('PASS Filter Lines incremental Follow completion, split CRLF, and reset rebuild')
+
   await click('Follow File')
   await until(`document.getElementById('follow-status').hidden`, 'follow mode exit')
   assert.equal(

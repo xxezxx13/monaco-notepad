@@ -100,6 +100,7 @@ type MenuCommand =
   | 'redo'
   | 'select-all'
   | 'delete'
+  | 'filter-lines'
   | 'find'
   | 'find-next'
   | 'replace'
@@ -391,6 +392,9 @@ const api = {
 
   setPrimarySelection: (text: string): Promise<void> =>
     ipcRenderer.invoke('linux:primary-selection:set', text),
+
+  writeClipboardText: (text: string): Promise<void> =>
+    ipcRenderer.invoke('clipboard:write-text', text),
 
   hashSelections: (algorithm: 'sha256' | 'sha1' | 'md5', selections: string[]): Promise<string[]> =>
     ipcRenderer.invoke('selection:hash-copy', algorithm, selections),

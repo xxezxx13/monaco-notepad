@@ -7,7 +7,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "test": "node tests/files.test.mjs && node tests/text.test.mjs && node tests/transforms.test.mjs && node tests/selection-hash.test.mjs && node tests/follow.test.mjs && node tests/positions.test.mjs && node tests/conflict.test.mjs && node tests/portal.test.mjs",
+    "test": "node tests/files.test.mjs && node tests/text.test.mjs && node tests/transforms.test.mjs && node tests/selection-hash.test.mjs && node tests/line-filter.test.mjs && node tests/follow.test.mjs && node tests/positions.test.mjs && node tests/conflict.test.mjs && node tests/portal.test.mjs",
     "pretest:runtime": "npm run build",
     "test:runtime": "env -u ELECTRON_RUN_AS_NODE electron tests/runtime.cjs && env -u ELECTRON_RUN_AS_NODE electron tests/startup.cjs explicit && env -u ELECTRON_RUN_AS_NODE electron tests/startup.cjs recovery && env -u ELECTRON_RUN_AS_NODE electron tests/startup.cjs scratchpad && env -u ELECTRON_RUN_AS_NODE electron tests/startup.cjs last && env -u ELECTRON_RUN_AS_NODE electron tests/startup.cjs missing",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",

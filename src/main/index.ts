@@ -583,6 +583,11 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('clipboard:write-text', (_event, text: string) => {
+    if (typeof text !== 'string') throw new Error('Invalid clipboard text')
+    clipboard.writeText(text)
+  })
+
   ipcMain.handle(
     'selection:hash-copy',
     (_event, algorithm: SelectionHashAlgorithm, selections: string[]) => {

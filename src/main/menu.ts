@@ -265,6 +265,11 @@ export function installMenu(window: BrowserWindow): void {
         },
         { type: 'separator' },
         {
+          label: 'Filter Lines...',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: () => window.webContents.send('menu:command', 'filter-lines')
+        },
+        {
           label: 'Find...',
           accelerator: 'CmdOrCtrl+F',
           click: () => window.webContents.send('menu:command', 'find')
