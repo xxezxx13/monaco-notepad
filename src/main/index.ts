@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, dialog, nativeTheme, clipboard } fr
 import { isAbsolute, join, resolve } from 'path'
 import { basename, dirname } from 'node:path'
 import { realpathSync, statSync, watch, type FSWatcher } from 'node:fs'
-import { readFile, unlink, stat, lstat, realpath } from 'node:fs/promises'
+import { readFile, unlink, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import writeFileAtomic from 'write-file-atomic'
@@ -14,6 +14,7 @@ import {
   reopenFilePath,
   saveFile,
   getFileReadOnly,
+  inspectFilePath,
   type BomlessFileEncoding,
   type FileEncoding,
   type SaveFileRequest
@@ -985,40 +986,16 @@ app.whenReady().then(() => {
     })
   })
 
-  ipcMain.handle('file:properties', async (event, filePath: string, document) => {
-    const window = BrowserWindow.fromWebContents(event.sender)
-    if (!window) throw new Error('Unable to resolve application window')
-    try {
-      const [entry, target] = await Promise.all([lstat(filePath), stat(filePath)])
-      const symbolicTarget = entry.isSymbolicLink() ? await realpath(filePath) : null
-      const mode = (target.mode & 0o777).toString(8).padStart(3, '0')
-      const details = [
-        `Path: ${filePath}`,
-        `Filename: ${basename(filePath)}`,
-        `Size: ${target.size.toLocaleString()} bytes`,
-        `Last modified: ${target.mtime.toLocaleString()}`,
-        `Permissions: ${mode}`,
-        `Encoding: ${document.encoding}`,
-        `Line endings: ${document.eol}`,
-        `Language: ${document.language}`,
-        ...(symbolicTarget ? [`Symbolic link target: ${symbolicTarget}`] : [])
-      ]
-      await dialog.showMessageBox(window, {
-        type: 'info',
-        title: 'File Properties',
-        message: basename(filePath),
-        detail: details.join('\n'),
-        buttons: ['OK']
-      })
-    } catch (error) {
-      await dialog.showMessageBox(window, {
-        type: 'error',
-        title: 'File Properties Error',
-        message: 'File properties could not be read.',
-        detail: error instanceof Error ? error.message : String(error),
-        buttons: ['OK']
-      })
+  ipcMain.handle('file:inspect', (_event, filePath: string, encoding: FileEncoding) => {
+    if (typeof filePath !== 'string' || filePath.length === 0 || !isAbsolute(filePath)) {
+      throw new Error('Invalid file path')
     }
+
+    if (!['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252'].includes(encoding)) {
+      throw new Error('Unsupported file encoding')
+    }
+
+    return inspectFilePath(filePath, encoding)
   })
 
   ipcMain.handle('file:sha256', async (event, filePath: string, dirty: boolean) => {

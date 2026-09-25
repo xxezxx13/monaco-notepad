@@ -110,6 +110,44 @@
           </div>
         </div>
       </div>
+      <div
+        id="document-inspector-dialog"
+        class="modal"
+        hidden
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="document-inspector-title"
+      >
+        <div class="modal-overlay" data-inspector-close></div>
+        <div class="modal-content inspector-modal-content">
+          <h2 id="document-inspector-title">Document Inspector</h2>
+          <p class="inspector-intro">
+            Disk facts are a saved-source snapshot. Editor facts describe the current buffer.
+          </p>
+          <div
+            id="document-inspector-status"
+            class="inspector-status"
+            role="status"
+            aria-live="polite"
+          ></div>
+
+          <section class="inspector-section" aria-labelledby="document-inspector-disk-title">
+            <h3 id="document-inspector-disk-title">Disk / Saved Source</h3>
+            <dl id="document-inspector-disk" class="inspector-grid"></dl>
+          </section>
+
+          <section class="inspector-section" aria-labelledby="document-inspector-editor-title">
+            <h3 id="document-inspector-editor-title">Current Editor</h3>
+            <dl id="document-inspector-editor" class="inspector-grid"></dl>
+          </section>
+
+          <div class="modal-actions">
+            <button type="button" id="document-inspector-refresh">Refresh Disk</button>
+            <button type="button" id="document-inspector-copy">Copy Report</button>
+            <button type="button" id="document-inspector-close" data-inspector-close>Close</button>
+          </div>
+        </div>
+      </div>
       <div id="compare-view" hidden>
         <div id="compare-actions">
           <strong id="compare-title">Compare Against Disk</strong>

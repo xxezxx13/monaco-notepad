@@ -124,7 +124,7 @@ export function installMenu(window: BrowserWindow): void {
             ['Copy Filename', 'copy-filename'],
             ['Reveal in File Manager', 'reveal-file'],
             ['Open Terminal Here', 'open-terminal'],
-            ['File Properties', 'file-properties'],
+            ['Document Inspector...', 'document-inspector'],
             ['SHA-256', 'sha256']
           ].map(([label, command]) => ({
             label,

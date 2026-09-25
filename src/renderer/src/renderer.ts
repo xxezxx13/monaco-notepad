@@ -358,6 +358,23 @@ const transientStatus = transientStatusElement
 const editorContainer = container
 const shortcutsDialog = document.getElementById('shortcuts-dialog') as HTMLDivElement | null
 const shortcutsList = document.getElementById('shortcuts-list') as HTMLUListElement | null
+const inspectorDialog = document.getElementById(
+  'document-inspector-dialog'
+) as HTMLDivElement | null
+const inspectorDisk = document.getElementById('document-inspector-disk') as HTMLDListElement | null
+const inspectorEditor = document.getElementById(
+  'document-inspector-editor'
+) as HTMLDListElement | null
+const inspectorStatus = document.getElementById(
+  'document-inspector-status'
+) as HTMLDivElement | null
+const inspectorRefresh = document.getElementById(
+  'document-inspector-refresh'
+) as HTMLButtonElement | null
+const inspectorCopy = document.getElementById('document-inspector-copy') as HTMLButtonElement | null
+const inspectorClose = document.getElementById(
+  'document-inspector-close'
+) as HTMLButtonElement | null
 const compareView = document.getElementById('compare-view') as HTMLDivElement | null
 const diffContainer = document.getElementById('diff-editor') as HTMLDivElement | null
 const compareClose = document.getElementById('compare-close') as HTMLButtonElement | null
@@ -379,6 +396,25 @@ if (
 ) {
   throw new Error('Line filter UI not found')
 }
+
+if (
+  !inspectorDialog ||
+  !inspectorDisk ||
+  !inspectorEditor ||
+  !inspectorStatus ||
+  !inspectorRefresh ||
+  !inspectorCopy ||
+  !inspectorClose
+) {
+  throw new Error('Document Inspector UI not found')
+}
+
+const documentInspectorDialog = inspectorDialog
+const documentInspectorDisk = inspectorDisk
+const documentInspectorEditor = inspectorEditor
+const documentInspectorStatus = inspectorStatus
+const documentInspectorRefresh = inspectorRefresh
+const documentInspectorCopy = inspectorCopy
 
 const lineFilter = lineFilterElement
 const lineFilterQuery = lineFilterQueryElement
@@ -476,6 +512,9 @@ let lineFilterTimer: number | null = null
 let lineFilterResult: LineFilterResult | null = null
 let lineFilterOptionsSignature: string | null = null
 const lineFilterRenderLimit = 1000
+type InspectorDiskSnapshot = Awaited<ReturnType<typeof window.api.inspectFile>>
+let inspectorDiskSnapshot: InspectorDiskSnapshot | null = null
+let inspectorDiskError: string | null = null
 const bookmarks = editor.createDecorationsCollection()
 
 function showTransientStatus(message: string, error = false): void {
@@ -1140,6 +1179,246 @@ async function toggleFollowMode(): Promise<void> {
   else await enterFollowMode()
 }
 
+function inspectorEncodingLabel(
+  encoding: 'utf8' | 'utf8-bom' | 'utf16le' | 'utf16be' | 'windows1252'
+): string {
+  switch (encoding) {
+    case 'utf8':
+      return 'UTF-8'
+    case 'utf8-bom':
+      return 'UTF-8 BOM'
+    case 'utf16le':
+      return 'UTF-16 LE'
+    case 'utf16be':
+      return 'UTF-16 BE'
+    case 'windows1252':
+      return 'Windows-1252'
+  }
+}
+
+function inspectorBomLabel(bom: InspectorDiskSnapshot['bom']): string {
+  switch (bom) {
+    case 'none':
+      return 'None'
+    case 'utf8':
+      return 'UTF-8 BOM'
+    case 'utf16le':
+      return 'UTF-16 LE BOM'
+    case 'utf16be':
+      return 'UTF-16 BE BOM'
+  }
+}
+
+function inspectorReadOnlyLabel(): string {
+  if (followActive) return 'Follow Lock'
+  if (documentState.forcedReadOnly) return 'Safe Open'
+  if (documentState.readOnly) return 'Read Only'
+  if (documentState.voluntaryReadOnly) return 'Locked'
+  return 'Editable'
+}
+
+function inspectorEolCounts(info: { counts: { crlf: number; lf: number; cr: number } }): string {
+  return `CRLF ${info.counts.crlf.toLocaleString()} · LF ${info.counts.lf.toLocaleString()} · CR ${info.counts.cr.toLocaleString()}`
+}
+
+function inspectorRowsForDisk(): Array<[string, string]> {
+  const filePath = documentState.filePath
+
+  if (!filePath) {
+    return [['Saved source', 'Not saved to disk']]
+  }
+
+  if (inspectorDiskError) {
+    return [
+      ['Path', filePath],
+      ['Snapshot', 'Unavailable'],
+      ['Error', inspectorDiskError]
+    ]
+  }
+
+  const snapshot = inspectorDiskSnapshot
+
+  if (!snapshot || snapshot.filePath !== filePath) {
+    return [
+      ['Path', filePath],
+      ['Snapshot', 'Not refreshed']
+    ]
+  }
+
+  return [
+    ['Path', snapshot.filePath],
+    ['Filename', snapshot.filename],
+    ['Regular file', 'Yes'],
+    ['Symbolic link', snapshot.symbolicLink ? 'Yes' : 'No'],
+    ['Symbolic target', snapshot.symbolicTarget ?? '—'],
+    ['Exact size', `${snapshot.size.toLocaleString()} bytes`],
+    ['Last modified', new Date(snapshot.modifiedMs).toLocaleString()],
+    ['Permissions', snapshot.permissions],
+    ['Writable', snapshot.readOnly ? 'No' : 'Yes'],
+    ['Read only', snapshot.readOnly ? 'Yes' : 'No'],
+    ['Actual BOM', inspectorBomLabel(snapshot.bom)],
+    ['Raw NUL bytes', snapshot.nulBytes.toLocaleString()],
+    ['Disk EOL', snapshot.sourceEol.kind],
+    ['Disk EOL counts', inspectorEolCounts(snapshot.sourceEol)],
+    ['Scan encoding', inspectorEncodingLabel(snapshot.scanEncoding)],
+    ['Snapshot time', new Date(snapshot.inspectedAtMs).toLocaleString()]
+  ]
+}
+
+function inspectorRowsForEditor(): Array<[string, string]> {
+  const sourceEol = documentState.sourceEol
+
+  return [
+    ['Document', documentState.filePath ?? 'Untitled'],
+    ['Dirty', isDocumentDirty(model, documentState) ? 'Yes' : 'No'],
+    ['Current encoding', inspectorEncodingLabel(documentState.encoding)],
+    ['Saved encoding', inspectorEncodingLabel(documentState.savedEncoding)],
+    ['Monaco model EOL', model.getEOL() === '\r\n' ? 'CRLF' : 'LF'],
+    ['Source EOL', sourceEol ? sourceEolLabel() : 'Not saved'],
+    ['Source EOL counts', sourceEol ? inspectorEolCounts(sourceEol) : '—'],
+    ['Pending normalization', documentState.eolNormalizationTarget ?? 'None'],
+    ['Lines', model.getLineCount().toLocaleString()],
+    ['Characters', countCharacters(model.getValue()).toLocaleString()],
+    ['Language', model.getLanguageId()],
+    ['Access state', inspectorReadOnlyLabel()],
+    ['Follow', followActive ? 'Active' : 'Inactive'],
+    ['Large File Mode', documentState.largeFileMode ? 'Active' : 'Inactive']
+  ]
+}
+
+function renderInspectorRows(
+  target: HTMLDListElement,
+  rows: ReadonlyArray<readonly [string, string]>
+): void {
+  const fragment = document.createDocumentFragment()
+
+  for (const [label, value] of rows) {
+    const term = document.createElement('dt')
+    const description = document.createElement('dd')
+    term.textContent = label
+    description.textContent = value
+    fragment.append(term, description)
+  }
+
+  target.replaceChildren(fragment)
+}
+
+function renderInspectorEditor(): void {
+  renderInspectorRows(documentInspectorEditor, inspectorRowsForEditor())
+}
+
+function renderInspectorDisk(): void {
+  renderInspectorRows(documentInspectorDisk, inspectorRowsForDisk())
+}
+
+function closeDocumentInspector(): void {
+  documentInspectorDialog.hidden = true
+  editor.focus()
+}
+
+async function refreshInspectorDisk(): Promise<void> {
+  const filePath = documentState.filePath
+  const generation = documentGeneration
+
+  renderInspectorEditor()
+  inspectorDiskSnapshot = null
+  inspectorDiskError = null
+
+  if (!filePath) {
+    renderInspectorDisk()
+    documentInspectorStatus.textContent = 'This document has not been saved to disk.'
+    documentInspectorRefresh.disabled = false
+    return
+  }
+
+  documentInspectorRefresh.disabled = true
+  documentInspectorStatus.textContent = 'Reading saved-source snapshot…'
+  renderInspectorDisk()
+
+  try {
+    const snapshot = await window.api.inspectFile(filePath, documentState.savedEncoding)
+
+    if (generation !== documentGeneration || filePath !== documentState.filePath) {
+      inspectorDiskSnapshot = null
+      inspectorDiskError = null
+      renderInspectorDisk()
+      documentInspectorStatus.textContent =
+        'The active document changed during inspection. Refresh Disk for the current document.'
+      return
+    }
+
+    inspectorDiskSnapshot = snapshot
+    renderInspectorDisk()
+    renderInspectorEditor()
+    documentInspectorStatus.textContent = `Disk snapshot captured ${new Date(snapshot.inspectedAtMs).toLocaleString()}.`
+  } catch (error) {
+    inspectorDiskSnapshot = null
+    inspectorDiskError = error instanceof Error ? error.message : String(error)
+    renderInspectorDisk()
+    documentInspectorStatus.textContent = conciseTransformError('Disk inspection failed', error)
+  } finally {
+    documentInspectorRefresh.disabled = false
+  }
+}
+
+function documentInspectorReport(): string {
+  const section = (title: string, rows: Array<[string, string]>): string =>
+    [title, ...rows.map(([label, value]) => `${label}: ${value}`)].join('\n')
+
+  return [
+    'Monaco Notepad — Document Inspector',
+    '',
+    section('Disk / Saved Source', inspectorRowsForDisk()),
+    '',
+    section('Current Editor', inspectorRowsForEditor())
+  ].join('\n')
+}
+
+async function copyDocumentInspectorReport(): Promise<void> {
+  renderInspectorEditor()
+  await window.api.writeClipboardText(documentInspectorReport())
+  documentInspectorStatus.textContent = 'Inspector report copied to clipboard.'
+}
+
+function openDocumentInspector(): void {
+  if (compareView && !compareView.hidden) closeCompare()
+  if (shortcutsDialog && !shortcutsDialog.hidden) shortcutsDialog.hidden = true
+
+  inspectorDiskSnapshot = null
+  inspectorDiskError = null
+  documentInspectorDialog.hidden = false
+  renderInspectorEditor()
+  renderInspectorDisk()
+  documentInspectorStatus.textContent = documentState.filePath
+    ? 'Disk snapshot has not been read yet.'
+    : 'This document has not been saved to disk.'
+  documentInspectorRefresh.focus()
+
+  void refreshInspectorDisk()
+}
+
+documentInspectorRefresh.addEventListener('click', () => {
+  void refreshInspectorDisk()
+})
+
+documentInspectorCopy.addEventListener('click', () => {
+  void copyDocumentInspectorReport()
+})
+
+documentInspectorDialog.addEventListener('click', (event) => {
+  const target = event.target
+  if (target instanceof HTMLElement && target.hasAttribute('data-inspector-close')) {
+    closeDocumentInspector()
+  }
+})
+
+documentInspectorDialog.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeDocumentInspector()
+  }
+})
+
 function toggleShortcutsDialog(): void {
   if (!shortcutsDialog) return
   const visible = shortcutsDialog.hidden
@@ -1293,7 +1572,7 @@ function statusEolValue(): typeof documentState.eol | 'CR' | 'Mixed' {
   return documentState.eol
 }
 
-function filePropertiesEolLabel(): 'LF' | 'CRLF' | 'CR' | 'Mixed EOL' {
+function sourceEolLabel(): 'LF' | 'CRLF' | 'CR' | 'Mixed EOL' {
   const value = statusEolValue()
   return value === 'Mixed' ? 'Mixed EOL' : value
 }
@@ -2188,13 +2467,8 @@ window.api.onMenuCommand((command) => {
     case 'open-terminal':
       void window.api.openTerminal(documentState.filePath)
       break
-    case 'file-properties':
-      if (documentState.filePath)
-        void window.api.showFileProperties(documentState.filePath, {
-          encoding: documentState.encoding,
-          eol: filePropertiesEolLabel(),
-          language: model.getLanguageId()
-        })
+    case 'document-inspector':
+      openDocumentInspector()
       break
     case 'sha256':
       if (documentState.filePath)

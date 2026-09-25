@@ -66,6 +66,19 @@ async function setText(text) {
   await delay(250)
 }
 
+function inspectorValueExpression(sectionId, label) {
+  const selector = `#${sectionId} dt`
+  return `(() => {
+    const terms = [...document.querySelectorAll(${JSON.stringify(selector)})]
+    const term = terms.find((node) => node.textContent === ${JSON.stringify(label)})
+    return term?.nextElementSibling?.textContent ?? ''
+  })()`
+}
+
+async function inspectorValue(sectionId, label) {
+  return evaluate(inspectorValueExpression(sectionId, label))
+}
+
 async function setLineFilterControls({
   query,
   regex = false,
@@ -151,6 +164,25 @@ async function run() {
     await evaluate(`document.getElementById('transient-status').innerText`),
     /requires a saved file/
   )
+
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden`,
+    'untitled document inspector open'
+  )
+  assert.equal(await inspectorValue('document-inspector-disk', 'Saved source'), 'Not saved to disk')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Document'), 'Untitled')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Dirty'), 'Yes')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Current encoding'), 'UTF-8')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Saved encoding'), 'UTF-8')
+  assert.equal(await evaluate(`document.activeElement?.id`), 'document-inspector-refresh')
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'untitled inspector close focus restore'
+  )
+  console.log('PASS Document Inspector untitled state and focus restore')
+
   console.log('PASS Linux primary selection and middle-click paste')
 
   await setText('{"a":[1,true]}')
@@ -180,8 +212,15 @@ async function run() {
   await evaluate(`editor.setSelection(new monaco.Selection(1,8,1,15))`)
   await click('Format JSON')
   assert.equal(await evaluate('editor.getValue()'), 'prefix {\n    "a": 1\n} suffix')
+  await until(
+    `editor.getModel().canUndo() && editor.getSelection()?.endLineNumber === 3`,
+    'selected JSON transform undo ready'
+  )
   await click('Undo')
-  await until(`editor.getValue() === 'prefix {"a":1} suffix'`, 'undo selected JSON format')
+  await until(
+    `editor.getValue() === 'prefix {"a":1} suffix' && editor.getModel().canRedo()`,
+    'undo selected JSON format'
+  )
   await setText('{bad}')
   await evaluate(`editor.setPosition({lineNumber: 1, column: 1})`)
   await click('Format JSON')
@@ -307,6 +346,42 @@ async function run() {
   await click('Save As...')
   await until(`!document.title.startsWith('*')`, 'save as')
   assert.equal(await fs.readFile(savePath, 'utf8'), await evaluate('editor.getValue()'))
+
+  await evaluate(`(() => {
+    const encoding = document.getElementById('encoding')
+    encoding.value = 'utf16le'
+    encoding.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await until(
+    `document.getElementById('encoding').value === 'utf16le' && document.title.startsWith('*')`,
+    'current encoding differs from saved encoding'
+  )
+
+  await click('Document Inspector...')
+  await until(
+    `document.getElementById('document-inspector-disk').innerText.includes('Scan encoding')`,
+    'encoding inspector disk snapshot'
+  )
+  assert.equal(await inspectorValue('document-inspector-editor', 'Dirty'), 'Yes')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Current encoding'), 'UTF-16 LE')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Saved encoding'), 'UTF-8')
+  assert.equal(await inspectorValue('document-inspector-disk', 'Scan encoding'), 'UTF-8')
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'encoding inspector close focus restore'
+  )
+
+  await evaluate(`(() => {
+    const encoding = document.getElementById('encoding')
+    encoding.value = 'utf8'
+    encoding.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await until(
+    `document.getElementById('encoding').value === 'utf8' && !document.title.startsWith('*')`,
+    'restore saved UTF-8 encoding'
+  )
+
   await setText('trimmed on save   ')
   await click('Save')
   assert.equal(await fs.readFile(savePath, 'utf8'), 'trimmed on save')
@@ -330,8 +405,41 @@ async function run() {
     await delay(50)
   }
   assert.equal((await fs.readFile(terminalMarker, 'utf8')).trim(), path.dirname(savePath))
-  await click('File Properties')
-  assert.ok(messages.some((m) => m.title === 'File Properties' && m.detail.includes(savePath)))
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden`,
+    'document inspector open'
+  )
+  await until(
+    `document.getElementById('document-inspector-disk').innerText.includes(${JSON.stringify(savePath)})`,
+    'document inspector disk snapshot'
+  )
+  assert.equal(await inspectorValue('document-inspector-editor', 'Dirty'), 'No')
+
+  await evaluate(`document.getElementById('document-inspector-copy').click()`)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText().includes(savePath)) break
+    await delay(50)
+  }
+
+  const inspectorReport = clipboard.readText()
+  assert.match(inspectorReport, /Monaco Notepad — Document Inspector/)
+  assert.match(inspectorReport, /Disk \/ Saved Source/)
+  assert.ok(inspectorReport.includes(`Path: ${savePath}`))
+  assert.match(inspectorReport, /Current Editor/)
+  assert.match(inspectorReport, /Dirty: No/)
+  assert.match(
+    await evaluate(`document.getElementById('document-inspector-status').innerText`),
+    /copied to clipboard/i
+  )
+
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'saved inspector close focus restore'
+  )
+  console.log('PASS Document Inspector encoding and saved report separation')
+
   response = 0
   await click('SHA-256')
   assert.match(clipboard.readText(), /^[a-f0-9]{64}$/)
@@ -467,13 +575,31 @@ async function run() {
   assert.equal(await evaluate(`editor.getModel().getEOL()`), '\r\n')
   assert.equal(await evaluate(`document.title.startsWith('*')`), false)
 
-  const mixedPropertiesBefore = messages.length
-  await click('File Properties')
-  const mixedProperties = messages
-    .slice(mixedPropertiesBefore)
-    .find((message) => message.title === 'File Properties')
-  assert.ok(mixedProperties)
-  assert.match(mixedProperties.detail, /Line endings: Mixed EOL/)
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden`,
+    'mixed EOL document inspector open'
+  )
+  await until(
+    `document.getElementById('document-inspector-disk').innerText.includes('Disk EOL')`,
+    'mixed EOL disk snapshot'
+  )
+
+  const mixedDiskEol = await evaluate(`(() => {
+    const terms = [...document.querySelectorAll('#document-inspector-disk dt')]
+    const term = terms.find((node) => node.textContent === 'Disk EOL')
+    return term?.nextElementSibling?.textContent ?? ''
+  })()`)
+
+  const mixedEditorEol = await evaluate(`(() => {
+    const terms = [...document.querySelectorAll('#document-inspector-editor dt')]
+    const term = terms.find((node) => node.textContent === 'Source EOL')
+    return term?.nextElementSibling?.textContent ?? ''
+  })()`)
+
+  assert.equal(mixedDiskEol, 'Mixed')
+  assert.equal(mixedEditorEol, 'Mixed EOL')
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
 
   await click('Save')
   assert.equal(await fs.readFile(mixedEolPath, 'utf8'), mixedEolOriginal)
@@ -837,6 +963,46 @@ async function run() {
     `/Following/.test(document.getElementById('follow-status').innerText) && editor.getOption(monaco.editor.EditorOption.readOnly)`,
     'follow mode entry'
   )
+
+  await click('Document Inspector...')
+  await until(
+    `document.getElementById('document-inspector-disk').innerText.includes('Exact size')`,
+    'Follow inspector initial disk snapshot'
+  )
+  assert.equal(await inspectorValue('document-inspector-editor', 'Follow'), 'Active')
+  assert.equal(await inspectorValue('document-inspector-editor', 'Access state'), 'Follow Lock')
+
+  const followSnapshotSize = await inspectorValue('document-inspector-disk', 'Exact size')
+
+  await fs.appendFile(followedPath, 'inspector refresh probe\n')
+  await until(
+    `editor.getValue().endsWith('inspector refresh probe\\n')`,
+    'Follow inspector external append'
+  )
+
+  // The inspector is snapshot-based: Follow updates the editor, but the
+  // disk section must remain unchanged until Refresh Disk is requested.
+  await delay(350)
+  assert.equal(await inspectorValue('document-inspector-disk', 'Exact size'), followSnapshotSize)
+
+  const expectedRefreshedFollowSize = (await fs.stat(followedPath)).size
+  await evaluate(`document.getElementById('document-inspector-refresh').click()`)
+
+  await until(
+    `Number((${inspectorValueExpression('document-inspector-disk', 'Exact size')}).replace(/[^0-9]/g, '')) === ${expectedRefreshedFollowSize}`,
+    'Follow inspector manual disk refresh'
+  )
+
+  const refreshedFollowSize = await inspectorValue('document-inspector-disk', 'Exact size')
+  assert.equal(Number(refreshedFollowSize.replace(/[^0-9]/g, '')), expectedRefreshedFollowSize)
+  assert.equal(await inspectorValue('document-inspector-editor', 'Follow'), 'Active')
+
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'Follow inspector close focus restore'
+  )
+  console.log('PASS Document Inspector Follow manual refresh without polling')
 
   await click('Filter Lines...')
   await until(`!document.getElementById('line-filter').hidden`, 'Filter Lines during Follow')

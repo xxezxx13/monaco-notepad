@@ -13,6 +13,22 @@ type FileEolInfo = {
   }
 }
 
+type FileInspection = {
+  filePath: string
+  filename: string
+  size: number
+  modifiedMs: number
+  permissions: string
+  readOnly: boolean
+  symbolicLink: boolean
+  symbolicTarget: string | null
+  scanEncoding: FileEncoding
+  bom: 'none' | 'utf8' | 'utf16le' | 'utf16be'
+  nulBytes: number
+  sourceEol: FileEolInfo
+  inspectedAtMs: number
+}
+
 type OpenFileResult = {
   filePath: string
   text: string
@@ -94,7 +110,7 @@ type MenuCommand =
   | 'copy-filename'
   | 'reveal-file'
   | 'open-terminal'
-  | 'file-properties'
+  | 'document-inspector'
   | 'sha256'
   | 'undo'
   | 'redo'
@@ -240,14 +256,8 @@ const api = {
   openTerminal: (filePath: string | null): Promise<void> =>
     ipcRenderer.invoke('file:open-terminal', filePath),
 
-  showFileProperties: (
-    filePath: string,
-    document: {
-      encoding: FileEncoding
-      eol: 'LF' | 'CRLF' | 'CR' | 'Mixed EOL'
-      language: string
-    }
-  ): Promise<void> => ipcRenderer.invoke('file:properties', filePath, document),
+  inspectFile: (filePath: string, encoding: FileEncoding): Promise<FileInspection> =>
+    ipcRenderer.invoke('file:inspect', filePath, encoding),
 
   showSha256: (filePath: string, dirty: boolean): Promise<void> =>
     ipcRenderer.invoke('file:sha256', filePath, dirty),

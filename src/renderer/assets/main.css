@@ -470,6 +470,58 @@ body {
   outline-offset: 1px;
 }
 
+.inspector-modal-content {
+  width: min(720px, calc(100vw - 48px));
+  max-width: 720px;
+}
+
+.inspector-intro,
+.inspector-status {
+  margin: 0 0 14px;
+  opacity: 0.78;
+}
+
+.inspector-status {
+  min-height: 1.2em;
+}
+
+.inspector-section + .inspector-section {
+  margin-top: 18px;
+}
+
+.inspector-section h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(0, 1fr);
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+
+.inspector-grid dt,
+.inspector-grid dd {
+  margin: 0;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-grid dt {
+  font-weight: 600;
+}
+
+.inspector-grid dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: monospace;
+}
+
+.inspector-modal-content .modal-actions {
+  gap: 8px;
+}
+
 @media (max-width: 740px) {
   #statusbar > span:not(.status-spacer),
   #statusbar label {

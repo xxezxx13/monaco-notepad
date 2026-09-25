@@ -22,8 +22,37 @@ export interface FileEolInfo {
   kind: FileEolKind
   counts: FileEolCounts
 }
+
+function eolInfoFromCounts(counts: FileEolCounts): FileEolInfo {
+  const forms = Number(counts.crlf > 0) + Number(counts.lf > 0) + Number(counts.cr > 0)
+
+  const kind: FileEolKind =
+    forms > 1 ? 'Mixed' : counts.crlf > 0 ? 'CRLF' : counts.cr > 0 ? 'CR' : 'LF'
+
+  return { kind, counts }
+}
+
+export type FileBom = 'none' | 'utf8' | 'utf16le' | 'utf16be'
+
+export interface FileInspection {
+  filePath: string
+  filename: string
+  size: number
+  modifiedMs: number
+  permissions: string
+  readOnly: boolean
+  symbolicLink: boolean
+  symbolicTarget: string | null
+  scanEncoding: FileEncoding
+  bom: FileBom
+  nulBytes: number
+  sourceEol: FileEolInfo
+  inspectedAtMs: number
+}
+
 export const DEFAULT_LARGE_FILE_WARNING_BYTES = 20 * 1024 * 1024
 export const SAFE_OPEN_PROBE_BYTES = 8 * 1024
+export const FILE_INSPECTION_CHUNK_BYTES = 64 * 1024
 
 export function largeFileWarningBytes(mebibytes: 10 | 20 | 50 | 100): number {
   return mebibytes * 1024 * 1024
@@ -295,13 +324,244 @@ export function analyzeEol(text: string): FileEolInfo {
     }
   }
 
-  const forms = Number(crlf > 0) + Number(lf > 0) + Number(cr > 0)
+  return eolInfoFromCounts({ crlf, lf, cr })
+}
 
-  const kind: FileEolKind = forms > 1 ? 'Mixed' : crlf > 0 ? 'CRLF' : cr > 0 ? 'CR' : 'LF'
+interface FileInspectionPathState {
+  entry: Stats
+  target: Stats
+  symbolicLink: boolean
+  symbolicTarget: string | null
+}
+
+interface FileInspectionEolState {
+  pendingCr: boolean
+}
+
+function fileChangedDuringInspection(): Error {
+  return new Error('The file changed during inspection. Refresh and try again.')
+}
+
+function sameInspectionStats(left: Stats, right: Stats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.mode === right.mode
+  )
+}
+
+async function readInspectionPathState(filePath: string): Promise<FileInspectionPathState> {
+  const entry = await lstat(filePath)
+  const symbolicLink = entry.isSymbolicLink()
+  const symbolicTarget = symbolicLink ? await realpath(filePath) : null
+  const target = await stat(filePath)
 
   return {
-    kind,
-    counts: { crlf, lf, cr }
+    entry,
+    target,
+    symbolicLink,
+    symbolicTarget
+  }
+}
+
+function assertInspectionPathStable(
+  before: FileInspectionPathState,
+  after: FileInspectionPathState
+): void {
+  if (
+    before.symbolicLink !== after.symbolicLink ||
+    before.symbolicTarget !== after.symbolicTarget ||
+    !sameInspectionStats(before.entry, after.entry) ||
+    !sameInspectionStats(before.target, after.target)
+  ) {
+    throw fileChangedDuringInspection()
+  }
+}
+
+function consumeInspectionEolUnit(
+  unit: number,
+  counts: FileEolCounts,
+  state: FileInspectionEolState
+): void {
+  if (state.pendingCr) {
+    if (unit === 0x0a) {
+      counts.crlf++
+      state.pendingCr = false
+      return
+    }
+
+    counts.cr++
+    state.pendingCr = false
+  }
+
+  if (unit === 0x0d) {
+    state.pendingCr = true
+  } else if (unit === 0x0a) {
+    counts.lf++
+  }
+}
+
+function finishInspectionEol(counts: FileEolCounts, state: FileInspectionEolState): void {
+  if (state.pendingCr) {
+    counts.cr++
+    state.pendingCr = false
+  }
+}
+
+function detectFileBom(prefix: readonly number[]): FileBom {
+  if (prefix.length >= 3 && prefix[0] === 0xef && prefix[1] === 0xbb && prefix[2] === 0xbf) {
+    return 'utf8'
+  }
+
+  if (prefix.length >= 2 && prefix[0] === 0xff && prefix[1] === 0xfe) {
+    return 'utf16le'
+  }
+
+  if (prefix.length >= 2 && prefix[0] === 0xfe && prefix[1] === 0xff) {
+    return 'utf16be'
+  }
+
+  return 'none'
+}
+
+function formatFilePermissions(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(4, '0')
+}
+
+export async function inspectFilePath(
+  filePath: string,
+  scanEncoding: FileEncoding
+): Promise<FileInspection> {
+  const before = await readInspectionPathState(filePath)
+
+  if (!before.target.isFile()) {
+    throw new Error('Only regular files can be inspected.')
+  }
+
+  const counts: FileEolCounts = {
+    crlf: 0,
+    lf: 0,
+    cr: 0
+  }
+  const eolState: FileInspectionEolState = {
+    pendingCr: false
+  }
+  const prefix: number[] = []
+
+  let nulBytes = 0
+  let utf16Carry: number | null = null
+
+  const handle = await open(filePath, 'r')
+
+  try {
+    const opened = await handle.stat()
+
+    if (!sameInspectionStats(before.target, opened)) {
+      throw fileChangedDuringInspection()
+    }
+
+    const buffer = Buffer.allocUnsafe(FILE_INSPECTION_CHUNK_BYTES)
+
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
+
+      if (bytesRead === 0) break
+
+      for (let index = 0; index < bytesRead; index++) {
+        const byte = buffer[index]
+
+        if (prefix.length < 3) {
+          prefix.push(byte)
+        }
+
+        if (byte === 0) {
+          nulBytes++
+        }
+      }
+
+      if (scanEncoding === 'utf16le' || scanEncoding === 'utf16be') {
+        let index = 0
+
+        if (utf16Carry !== null) {
+          const unit =
+            scanEncoding === 'utf16le'
+              ? utf16Carry | (buffer[0] << 8)
+              : (utf16Carry << 8) | buffer[0]
+
+          consumeInspectionEolUnit(unit, counts, eolState)
+          utf16Carry = null
+          index = 1
+        }
+
+        for (; index + 1 < bytesRead; index += 2) {
+          const unit =
+            scanEncoding === 'utf16le'
+              ? buffer[index] | (buffer[index + 1] << 8)
+              : (buffer[index] << 8) | buffer[index + 1]
+
+          consumeInspectionEolUnit(unit, counts, eolState)
+        }
+
+        if (index < bytesRead) {
+          utf16Carry = buffer[index]
+        }
+      } else {
+        for (let index = 0; index < bytesRead; index++) {
+          consumeInspectionEolUnit(buffer[index], counts, eolState)
+        }
+      }
+    }
+
+    const scanned = await handle.stat()
+
+    if (!sameInspectionStats(before.target, scanned)) {
+      throw fileChangedDuringInspection()
+    }
+  } finally {
+    await handle.close()
+  }
+
+  finishInspectionEol(counts, eolState)
+
+  let after: FileInspectionPathState
+
+  try {
+    after = await readInspectionPathState(filePath)
+  } catch {
+    throw fileChangedDuringInspection()
+  }
+
+  assertInspectionPathStable(before, after)
+
+  const readOnly = await getFileReadOnly(filePath)
+
+  let finalState: FileInspectionPathState
+
+  try {
+    finalState = await readInspectionPathState(filePath)
+  } catch {
+    throw fileChangedDuringInspection()
+  }
+
+  assertInspectionPathStable(before, finalState)
+
+  return {
+    filePath,
+    filename: basename(filePath),
+    size: finalState.target.size,
+    modifiedMs: finalState.target.mtimeMs,
+    permissions: formatFilePermissions(finalState.target.mode),
+    readOnly,
+    symbolicLink: finalState.symbolicLink,
+    symbolicTarget: finalState.symbolicTarget,
+    scanEncoding,
+    bom: detectFileBom(prefix),
+    nulBytes,
+    sourceEol: eolInfoFromCounts(counts),
+    inspectedAtMs: Date.now()
   }
 }
 

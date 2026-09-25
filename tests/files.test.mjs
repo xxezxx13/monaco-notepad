@@ -25,6 +25,7 @@ const sourcePath = fileURLToPath(new URL('../src/main/files.ts', import.meta.url
 const require = createRequire(sourcePath)
 const dialogCalls = []
 const fileReads = []
+let inspectionReadHook = null
 let dialogResponse = 1
 let saveDialogPath = null
 const dialog = {
@@ -57,6 +58,34 @@ vm.runInNewContext(compiled, {
     if (name === 'node:fs/promises') {
       return {
         ...filesystem,
+        async open(...args) {
+          const handle = await filesystem.open(...args)
+
+          if (!inspectionReadHook) {
+            return handle
+          }
+
+          return new Proxy(handle, {
+            get(target, property) {
+              if (property === 'read') {
+                return async (...readArgs) => {
+                  const result = await target.read(...readArgs)
+
+                  if (inspectionReadHook && result.bytesRead > 0) {
+                    const hook = inspectionReadHook
+                    inspectionReadHook = null
+                    await hook()
+                  }
+
+                  return result
+                }
+              }
+
+              const value = target[property]
+              return typeof value === 'function' ? value.bind(target) : value
+            }
+          })
+        },
         readFile(...args) {
           fileReads.push(args[0])
           return filesystem.readFile(...args)
@@ -73,6 +102,7 @@ const {
   detectBomlessUtf16,
   encodeTextFile,
   getFileReadOnly,
+  inspectFilePath,
   isLikelyBinary,
   openFilePath,
   reopenFilePath,
@@ -108,6 +138,135 @@ test('EOL analysis counts CRLF before standalone LF and CR', () => {
     assert.equal(actual.counts.crlf, crlf)
     assert.equal(actual.counts.lf, lf)
     assert.equal(actual.counts.cr, cr)
+  }
+})
+
+test('disk inspection streams BOM, NUL, EOL, and filesystem metadata', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'inspect.txt')
+  const content = Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from('one\r\ntwo\nthree\rfour\0', 'utf8')
+  ])
+
+  await writeFile(file, content)
+  await chmod(file, 0o640)
+
+  fileReads.length = 0
+
+  const inspected = await inspectFilePath(file, 'utf8')
+
+  assert.equal(inspected.filePath, file)
+  assert.equal(inspected.filename, 'inspect.txt')
+  assert.equal(inspected.size, content.length)
+  assert.equal(inspected.permissions, '0640')
+  assert.equal(inspected.readOnly, false)
+  assert.equal(inspected.symbolicLink, false)
+  assert.equal(inspected.symbolicTarget, null)
+  assert.equal(inspected.scanEncoding, 'utf8')
+  assert.equal(inspected.bom, 'utf8')
+  assert.equal(inspected.nulBytes, 1)
+  assert.equal(inspected.sourceEol.kind, 'Mixed')
+  assert.equal(inspected.sourceEol.counts.crlf, 1)
+  assert.equal(inspected.sourceEol.counts.lf, 1)
+  assert.equal(inspected.sourceEol.counts.cr, 1)
+  assert.equal(Number.isFinite(inspected.modifiedMs), true)
+  assert.equal(Number.isFinite(inspected.inspectedAtMs), true)
+  assert.equal(fileReads.length, 0, 'inspection must not use whole-file readFile')
+})
+
+test('disk inspection counts UTF-16 LE and BE line endings by code unit', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const text = 'one\r\ntwo\nthree\rfour'
+
+  for (const [encoding, expectedBom] of [
+    ['utf16le', 'utf16le'],
+    ['utf16be', 'utf16be']
+  ]) {
+    const file = join(directory, `${encoding}.txt`)
+    await writeFile(file, Buffer.from(encodeTextFile(text, encoding)))
+
+    const inspected = await inspectFilePath(file, encoding)
+
+    assert.equal(inspected.scanEncoding, encoding)
+    assert.equal(inspected.bom, expectedBom)
+    assert.equal(inspected.sourceEol.kind, 'Mixed')
+    assert.equal(inspected.sourceEol.counts.crlf, 1)
+    assert.equal(inspected.sourceEol.counts.lf, 1)
+    assert.equal(inspected.sourceEol.counts.cr, 1)
+  }
+})
+
+test('disk inspection preserves CRLF across streaming chunk boundaries', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'chunk-boundary.txt')
+  const content = Buffer.concat([
+    Buffer.alloc(module.exports.FILE_INSPECTION_CHUNK_BYTES - 1, 0x61),
+    Buffer.from('\r\nend', 'utf8')
+  ])
+
+  await writeFile(file, content)
+
+  const inspected = await inspectFilePath(file, 'utf8')
+
+  assert.equal(inspected.sourceEol.kind, 'CRLF')
+  assert.equal(inspected.sourceEol.counts.crlf, 1)
+  assert.equal(inspected.sourceEol.counts.lf, 0)
+  assert.equal(inspected.sourceEol.counts.cr, 0)
+})
+
+test('disk inspection preserves UTF-16 CRLF across read boundaries', async (t) => {
+  const directory = await temporaryDirectory(t)
+
+  for (const encoding of ['utf16le', 'utf16be']) {
+    const file = join(directory, `utf16-boundary-${encoding}.txt`)
+    const prefixCharacters = module.exports.FILE_INSPECTION_CHUNK_BYTES / 2 - 2
+    const text = `${'a'.repeat(prefixCharacters)}\r\nend`
+
+    await writeFile(file, Buffer.from(encodeTextFile(text, encoding)))
+
+    const inspected = await inspectFilePath(file, encoding)
+
+    assert.equal(inspected.sourceEol.kind, 'CRLF')
+    assert.equal(inspected.sourceEol.counts.crlf, 1)
+    assert.equal(inspected.sourceEol.counts.lf, 0)
+    assert.equal(inspected.sourceEol.counts.cr, 0)
+  }
+})
+
+test('disk inspection reports symbolic links while scanning target content', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const target = join(directory, 'target.txt')
+  const link = join(directory, 'link.txt')
+
+  await writeFile(target, 'first\r\nsecond\r\n')
+  await symlink('target.txt', link)
+
+  const inspected = await inspectFilePath(link, 'utf8')
+
+  assert.equal(inspected.filePath, link)
+  assert.equal(inspected.filename, 'link.txt')
+  assert.equal(inspected.symbolicLink, true)
+  assert.equal(inspected.symbolicTarget, target)
+  assert.equal(inspected.size, Buffer.byteLength('first\r\nsecond\r\n'))
+  assert.equal(inspected.sourceEol.kind, 'CRLF')
+  assert.equal(inspected.sourceEol.counts.crlf, 2)
+})
+
+test('disk inspection rejects files that change during the scan', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'changing.txt')
+
+  await writeFile(file, Buffer.alloc(module.exports.FILE_INSPECTION_CHUNK_BYTES * 2, 0x61))
+
+  inspectionReadHook = async () => {
+    await writeFile(file, 'replacement while inspection is active\n')
+  }
+
+  try {
+    await assert.rejects(inspectFilePath(file, 'utf8'), /changed during inspection/)
+  } finally {
+    inspectionReadHook = null
   }
 })
 
