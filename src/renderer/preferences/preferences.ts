@@ -98,6 +98,7 @@ async function loadPreferences(): Promise<void> {
   setValue($<HTMLInputElement>('primary-selection-paste')!, preferences.primarySelectionPaste)
 
   setValue($<HTMLInputElement>('reopen-last-document')!, preferences.reopenLastDocument)
+  setValue($<HTMLInputElement>('backup-on-save')!, preferences.backupOnSave)
   setValue($<HTMLSelectElement>('large-file-warning')!, String(preferences.largeFileWarningMiB))
   setValue($<HTMLSelectElement>('default-encoding')!, preferences.defaultEncoding)
   setValue($<HTMLSelectElement>('default-eol')!, preferences.defaultEol)
@@ -121,6 +122,7 @@ bindBoolean('show-line-numbers', 'showLineNumbers')
 bindBoolean('primary-selection-paste', 'primarySelectionPaste')
 
 bindBoolean('reopen-last-document', 'reopenLastDocument')
+bindBoolean('backup-on-save', 'backupOnSave')
 bindSelect('large-file-warning', 'largeFileWarningMiB')
 bindSelect('default-encoding', 'defaultEncoding')
 bindSelect('default-eol', 'defaultEol')

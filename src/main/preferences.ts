@@ -30,6 +30,7 @@ export interface Preferences {
   showWhitespace: boolean
   showLineNumbers: boolean
   reopenLastDocument: boolean
+  backupOnSave: boolean
   lastDocumentPath: string | null
   lastDocumentEncoding: 'auto' | 'utf8' | 'windows1252'
   windowWidth: number
@@ -59,6 +60,7 @@ export const preferences = new Store<Preferences>({
     showWhitespace: false,
     showLineNumbers: false,
     reopenLastDocument: false,
+    backupOnSave: false,
     lastDocumentPath: null,
     lastDocumentEncoding: 'auto',
     windowWidth: 900,

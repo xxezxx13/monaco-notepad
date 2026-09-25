@@ -714,14 +714,49 @@ export function encodeTextFile(text: string, encoding: FileEncoding): Uint8Array
   }
 }
 
+async function writeBackupBeforeSave(target: SaveTarget): Promise<void> {
+  if (!target.stats) return
+
+  const backupPath = `${target.path}.bak`
+  const backupEntry = await lstat(backupPath).catch((error: unknown) => {
+    if (!isMissingFile(error)) throw error
+    return null
+  })
+
+  if (backupEntry) {
+    if (backupEntry.isSymbolicLink()) {
+      throw new Error('The backup path is a symbolic link. The file was not saved.')
+    }
+    if (!backupEntry.isFile()) {
+      throw new Error('The backup path is not a regular file. The file was not saved.')
+    }
+    if ((backupEntry.mode & 0o222) === 0) {
+      throw new Error('The backup file is read-only. The file was not saved.')
+    }
+    await access(backupPath, constants.W_OK)
+  }
+
+  const previousBytes = await readFile(target.path)
+
+  await writeFileAtomic(backupPath, previousBytes, {
+    mode: target.stats.mode,
+    chown: { uid: target.stats.uid, gid: target.stats.gid }
+  })
+}
+
 export async function writeTextFileAtomic(
   filePath: string,
   text: string,
-  encoding: FileEncoding
+  encoding: FileEncoding,
+  backupBeforeSave = false
 ): Promise<void> {
   const bytes = encodeTextFile(text, encoding)
   const target = await resolveSaveTarget(filePath)
   await assertWritableTarget(target)
+
+  if (backupBeforeSave) {
+    await writeBackupBeforeSave(target)
+  }
 
   // Resolve a live symlink before writing so the link itself stays intact.
   // Preserve executable and other permission bits; the library retains uid/gid
@@ -746,7 +781,8 @@ export interface SaveFileRequest {
 export async function saveFile(
   window: BrowserWindow,
   request: SaveFileRequest,
-  dialogTitle = 'Save As'
+  dialogTitle = 'Save As',
+  backupBeforeSave = false
 ): Promise<string | null> {
   let filePath = request.filePath
 
@@ -790,7 +826,7 @@ export async function saveFile(
     }
   }
 
-  await writeTextFileAtomic(filePath, request.text, request.encoding)
+  await writeTextFileAtomic(filePath, request.text, request.encoding, backupBeforeSave)
 
   return filePath
 }

@@ -344,6 +344,122 @@ test('atomic saves preserve executable mode and ownership', async (t) => {
   assert.notEqual(saved.ino, original.ino, 'saving should atomically replace the target')
 })
 
+test('backup-on-save preserves the immediately previous disk contents', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'document.txt')
+  const backup = `${file}.bak`
+
+  await writeFile(file, 'first version')
+  await writeTextFileAtomic(file, 'second version', 'utf8', true)
+
+  assert.equal(await readFile(file, 'utf8'), 'second version')
+  assert.equal(await readFile(backup, 'utf8'), 'first version')
+
+  await writeTextFileAtomic(file, 'third version', 'utf8', true)
+
+  assert.equal(await readFile(file, 'utf8'), 'third version')
+  assert.equal(await readFile(backup, 'utf8'), 'second version')
+})
+
+test('Save As over an existing destination backs up that destination before replacement', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const destination = join(directory, 'existing.txt')
+
+  await writeFile(destination, 'destination before save as')
+  saveDialogPath = destination
+
+  try {
+    const saved = await saveFile(
+      {},
+      {
+        filePath: null,
+        text: 'replacement from Save As',
+        encoding: 'utf8'
+      },
+      'Save As',
+      true
+    )
+
+    assert.equal(saved, destination)
+    assert.equal(await readFile(destination, 'utf8'), 'replacement from Save As')
+    assert.equal(await readFile(`${destination}.bak`, 'utf8'), 'destination before save as')
+  } finally {
+    saveDialogPath = null
+  }
+})
+
+test('disabled backup-on-save preserves existing save behavior', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'document.txt')
+  const backup = `${file}.bak`
+
+  await writeFile(file, 'before')
+  await writeTextFileAtomic(file, 'after', 'utf8')
+
+  assert.equal(await readFile(file, 'utf8'), 'after')
+  await assert.rejects(stat(backup), { code: 'ENOENT' })
+})
+
+test('backup failure aborts the primary save', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'document.txt')
+  const backup = `${file}.bak`
+
+  await writeFile(file, 'original')
+  await writeFile(backup, 'older backup')
+  await chmod(backup, 0o444)
+
+  try {
+    await assert.rejects(
+      writeTextFileAtomic(file, 'replacement', 'utf8', true),
+      /backup file is read-only/
+    )
+    assert.equal(await readFile(file, 'utf8'), 'original')
+    assert.equal(await readFile(backup, 'utf8'), 'older backup')
+  } finally {
+    await chmod(backup, 0o644)
+  }
+})
+
+test('backup-on-save through a symlink backs up the resolved target without replacing the link', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const target = join(directory, 'target.sh')
+  const link = join(directory, 'link.sh')
+  const backup = `${target}.bak`
+
+  await writeFile(target, 'before')
+  await chmod(target, 0o750)
+  await symlink('target.sh', link)
+
+  await writeTextFileAtomic(link, 'after', 'utf8', true)
+
+  assert.equal((await lstat(link)).isSymbolicLink(), true)
+  assert.equal(await readFile(target, 'utf8'), 'after')
+  assert.equal(await readFile(backup, 'utf8'), 'before')
+  assert.equal((await stat(target)).mode & 0o7777, 0o750)
+  assert.equal((await stat(backup)).mode & 0o7777, 0o750)
+})
+
+test('backup-on-save rejects a symbolic-link backup path', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'document.txt')
+  const backup = `${file}.bak`
+  const unrelated = join(directory, 'unrelated.txt')
+
+  await writeFile(file, 'original')
+  await writeFile(unrelated, 'do not touch')
+  await symlink('unrelated.txt', backup)
+
+  await assert.rejects(
+    writeTextFileAtomic(file, 'replacement', 'utf8', true),
+    /backup path is a symbolic link/
+  )
+
+  assert.equal(await readFile(file, 'utf8'), 'original')
+  assert.equal(await readFile(unrelated, 'utf8'), 'do not touch')
+  assert.equal((await lstat(backup)).isSymbolicLink(), true)
+})
+
 test('saving a symlink preserves the link and target permissions', async (t) => {
   const directory = await temporaryDirectory(t)
   const target = join(directory, 'target.sh')

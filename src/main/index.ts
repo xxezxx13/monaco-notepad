@@ -518,6 +518,7 @@ app.whenReady().then(() => {
     showWhitespace: preferences.get('showWhitespace'),
     showLineNumbers: preferences.get('showLineNumbers'),
     reopenLastDocument: preferences.get('reopenLastDocument'),
+    backupOnSave: preferences.get('backupOnSave'),
     lastDocumentPath: preferences.get('lastDocumentPath'),
     lastDocumentEncoding: preferences.get('lastDocumentEncoding'),
     windowWidth: preferences.get('windowWidth'),
@@ -823,7 +824,7 @@ app.whenReady().then(() => {
 
       savesInProgress++
       try {
-        const filePath = await saveFile(window, request)
+        const filePath = await saveFile(window, request, 'Save As', preferences.get('backupOnSave'))
         if (filePath) {
           saveBaseline.record(filePath)
           watchFile(window, filePath)

@@ -407,6 +407,19 @@ async function run() {
   await click('Undo')
   assert.equal(await evaluate('editor.getValue()'), 'trimmed on save   ')
   await click('Redo')
+
+  const preBackupSaveText = await fs.readFile(savePath, 'utf8')
+  await evaluate(`window.api.preferences.set('backupOnSave', true)`)
+  await until(
+    `window.api.preferences.getAll().then((preferences) => preferences.backupOnSave === true)`,
+    'backup-on-save preference enabled'
+  )
+  await setText('backup-enabled save')
+  await click('Save')
+  await until(`!document.title.startsWith('*')`, 'backup-enabled ordinary save')
+  assert.equal(await fs.readFile(savePath, 'utf8'), 'backup-enabled save')
+  assert.equal(await fs.readFile(`${savePath}.bak`, 'utf8'), preBackupSaveText)
+
   await click('Copy Full Path')
   assert.equal(clipboard.readText(), savePath)
   await click('Copy Filename')
@@ -463,9 +476,11 @@ async function run() {
   assert.match(clipboard.readText(), /^[a-f0-9]{64}$/)
   const originalTitle = await evaluate('document.title')
   const copyPath = path.join(temporary, 'copy-only.txt')
+  await fs.writeFile(copyPath, 'existing copy contents')
   savePath = copyPath
   await click('Save a Copy...')
   assert.equal(await fs.readFile(copyPath, 'utf8'), await evaluate('editor.getValue()'))
+  await assert.rejects(fs.access(`${copyPath}.bak`))
   assert.equal(await evaluate('document.title'), originalTitle)
   savePath = path.join(temporary, 'saved.txt')
   await fs.writeFile(savePath, 'disk reload')
@@ -1416,6 +1431,7 @@ async function run() {
   assert.equal(preferences.showLineNumbers, false)
   assert.equal(preferences.typewriterScrolling, true)
   assert.equal(preferences.reopenLastDocument, true)
+  assert.equal(preferences.backupOnSave, true)
   assert.equal(preferences.tabSize, 8)
   assert.equal(preferences.insertSpaces, false)
   assert.equal(preferences.autoIndent, 'full')
