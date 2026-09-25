@@ -44,6 +44,44 @@
         <div id="line-filter-summary" role="status" aria-live="polite">Enter filter text</div>
         <div id="line-filter-results" role="list" aria-label="Filtered lines"></div>
       </section>
+      <section id="regex-extract" aria-label="Regex Extract" hidden>
+        <div id="regex-extract-controls">
+          <strong>Regex Extract</strong>
+          <input
+            id="regex-extract-pattern"
+            type="text"
+            placeholder="Regular expression"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Extraction regular expression"
+          />
+          <label class="regex-extract-option">
+            <input id="regex-extract-case" type="checkbox" />
+            Case sensitive
+          </label>
+          <label class="regex-extract-option">
+            Capture
+            <input
+              id="regex-extract-group"
+              type="number"
+              min="0"
+              step="1"
+              value="0"
+              aria-label="Capture group number"
+              title="0 extracts the complete match; 1 or higher extracts that capture group"
+            />
+          </label>
+          <button type="button" id="regex-extract-copy">Copy</button>
+          <button type="button" id="regex-extract-replace">Replace Source</button>
+          <button type="button" id="regex-extract-untitled">Open as Untitled</button>
+          <button type="button" id="regex-extract-close" aria-label="Close Regex Extract">
+            Close
+          </button>
+        </div>
+        <div id="regex-extract-summary" role="status" aria-live="polite">
+          Enter a regular expression
+        </div>
+      </section>
       <div id="statusbar">
         <span id="position"></span>
         <span id="word-count" title="Words are runs of non-whitespace characters">Words 0</span>

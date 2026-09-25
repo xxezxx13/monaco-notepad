@@ -214,6 +214,129 @@ body {
   }
 }
 
+#regex-extract {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font:
+    12px Inter,
+    'Noto Sans',
+    'Segoe UI',
+    sans-serif;
+}
+
+#regex-extract[hidden] {
+  display: none;
+}
+
+#regex-extract-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+#regex-extract-controls strong {
+  flex: 0 0 auto;
+}
+
+#regex-extract-pattern {
+  flex: 1 1 280px;
+  min-width: 140px;
+  max-width: 520px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+#regex-extract-pattern:focus-visible,
+#regex-extract-group:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.regex-extract-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.regex-extract-option input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+#regex-extract-group {
+  width: 58px;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+#regex-extract-controls button {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-control);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+#regex-extract-controls button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+#regex-extract-controls button:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#regex-extract-controls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#regex-extract-summary {
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+#regex-extract-summary.status-error {
+  color: #c42b1c;
+}
+
+@media (max-width: 1000px) {
+  #regex-extract-controls {
+    flex-wrap: wrap;
+  }
+
+  #regex-extract-pattern {
+    flex-basis: calc(100% - 140px);
+    max-width: none;
+  }
+}
+
 #compare-view {
   position: absolute;
   inset: 0;

@@ -55,6 +55,12 @@ import {
   indentationSpacesToTabs,
   removeDuplicateLines,
   sortLines,
+  naturalSortLines,
+  numericSortLines,
+  reverseLines,
+  joinLines,
+  splitLinesAtCommas,
+  reflowParagraphs,
   tabsToSpaces,
   trimTrailingWhitespace
 } from './text'
@@ -68,6 +74,7 @@ import {
   formatJson,
   formatXml,
   minifyJson,
+  normalizeUnicode,
   type TextTransform
 } from './transforms'
 import {
@@ -76,6 +83,7 @@ import {
   type LineFilterOptions,
   type LineFilterResult
 } from './line-filter'
+import { extractRegex } from './extraction'
 
 self.MonacoEnvironment = {
   getWorker() {
@@ -356,6 +364,31 @@ const finalNewlineStatus = finalNewlineElement
 const followStatus = followStatusElement
 const transientStatus = transientStatusElement
 const editorContainer = container
+const regexExtractElement = document.getElementById('regex-extract') as HTMLElement | null
+const regexExtractPatternElement = document.getElementById(
+  'regex-extract-pattern'
+) as HTMLInputElement | null
+const regexExtractCaseElement = document.getElementById(
+  'regex-extract-case'
+) as HTMLInputElement | null
+const regexExtractGroupElement = document.getElementById(
+  'regex-extract-group'
+) as HTMLInputElement | null
+const regexExtractCopyElement = document.getElementById(
+  'regex-extract-copy'
+) as HTMLButtonElement | null
+const regexExtractReplaceElement = document.getElementById(
+  'regex-extract-replace'
+) as HTMLButtonElement | null
+const regexExtractUntitledElement = document.getElementById(
+  'regex-extract-untitled'
+) as HTMLButtonElement | null
+const regexExtractCloseElement = document.getElementById(
+  'regex-extract-close'
+) as HTMLButtonElement | null
+const regexExtractSummaryElement = document.getElementById(
+  'regex-extract-summary'
+) as HTMLDivElement | null
 const shortcutsDialog = document.getElementById('shortcuts-dialog') as HTMLDivElement | null
 const shortcutsList = document.getElementById('shortcuts-list') as HTMLUListElement | null
 const inspectorDialog = document.getElementById(
@@ -398,6 +431,20 @@ if (
 }
 
 if (
+  !regexExtractElement ||
+  !regexExtractPatternElement ||
+  !regexExtractCaseElement ||
+  !regexExtractGroupElement ||
+  !regexExtractCopyElement ||
+  !regexExtractReplaceElement ||
+  !regexExtractUntitledElement ||
+  !regexExtractCloseElement ||
+  !regexExtractSummaryElement
+) {
+  throw new Error('Regex extraction UI not found')
+}
+
+if (
   !inspectorDialog ||
   !inspectorDisk ||
   !inspectorEditor ||
@@ -426,6 +473,16 @@ const lineFilterCopyNonmatching = lineFilterCopyNonmatchingElement
 const lineFilterClose = lineFilterCloseElement
 const lineFilterSummary = lineFilterSummaryElement
 const lineFilterResults = lineFilterResultsElement
+
+const regexExtract = regexExtractElement
+const regexExtractPattern = regexExtractPatternElement
+const regexExtractCase = regexExtractCaseElement
+const regexExtractGroup = regexExtractGroupElement
+const regexExtractCopy = regexExtractCopyElement
+const regexExtractReplace = regexExtractReplaceElement
+const regexExtractUntitled = regexExtractUntitledElement
+const regexExtractClose = regexExtractCloseElement
+const regexExtractSummary = regexExtractSummaryElement
 
 if (shortcutsList) {
   keyboardShortcuts.forEach((shortcut) => {
@@ -509,6 +566,7 @@ let followApplying = false
 let followAutoScroll = true
 let voluntaryReadOnlyBeforeFollow = false
 let lineFilterTimer: number | null = null
+let regexExtractTimer: number | null = null
 let lineFilterResult: LineFilterResult | null = null
 let lineFilterOptionsSignature: string | null = null
 const lineFilterRenderLimit = 1000
@@ -658,6 +716,7 @@ function queueLineFilterRefresh(delay?: number): void {
 
 function openLineFilter(): void {
   if (compareView && !compareView.hidden) closeCompare()
+  if (!regexExtract.hidden) closeRegexExtract(false)
 
   lineFilter.hidden = false
   renderLineFilter()
@@ -701,6 +760,245 @@ async function copyLineFilterSelection(invert: boolean): Promise<void> {
   )
 }
 
+interface CurrentRegexExtraction {
+  text: string
+  matchCount: number
+  sourceCount: number
+  sourceLabel: string
+}
+
+function regexExtractionSources(): {
+  texts: string[]
+  sourceLabel: string
+} {
+  const selected = (editor.getSelections() ?? []).filter((selection) => !selection.isEmpty())
+
+  if (selected.length > 0) {
+    return {
+      texts: selected.map((selection) => model.getValueInRange(selection)),
+      sourceLabel: selected.length === 1 ? 'selection' : `${selected.length} selections`
+    }
+  }
+
+  if (documentState.largeFileMode) {
+    throw new Error('Select text for Regex Extract in Large File Mode')
+  }
+
+  return {
+    texts: [model.getValue()],
+    sourceLabel: 'document'
+  }
+}
+
+function currentRegexExtraction(): CurrentRegexExtraction {
+  const pattern = regexExtractPattern.value
+  const captureGroup = regexExtractGroup.valueAsNumber
+  const sources = regexExtractionSources()
+  const values: string[] = []
+
+  for (const source of sources.texts) {
+    const result = extractRegex(
+      source,
+      {
+        pattern,
+        caseSensitive: regexExtractCase.checked,
+        captureGroup
+      },
+      modelEol()
+    )
+
+    values.push(...result.values)
+  }
+
+  return {
+    text: values.join(modelEol()),
+    matchCount: values.length,
+    sourceCount: sources.texts.length,
+    sourceLabel: sources.sourceLabel
+  }
+}
+
+function setRegexExtractionActions(enabled: boolean): void {
+  regexExtractCopy.disabled = !enabled
+  regexExtractUntitled.disabled = !enabled
+  regexExtractReplace.disabled = !enabled || editor.getOption(monaco.editor.EditorOption.readOnly)
+}
+
+function renderRegexExtract(): void {
+  if (regexExtractTimer !== null) {
+    window.clearTimeout(regexExtractTimer)
+    regexExtractTimer = null
+  }
+
+  regexExtractSummary.classList.remove('status-error')
+
+  if (regexExtractPattern.value.length === 0) {
+    regexExtractSummary.textContent = 'Enter a regular expression'
+    setRegexExtractionActions(false)
+    return
+  }
+
+  try {
+    const result = currentRegexExtraction()
+
+    if (result.matchCount === 0) {
+      regexExtractSummary.textContent = `No matches in ${result.sourceLabel}`
+      setRegexExtractionActions(false)
+      return
+    }
+
+    regexExtractSummary.textContent =
+      `${result.matchCount} ${result.matchCount === 1 ? 'value' : 'values'} ` +
+      `from ${result.sourceLabel}`
+
+    setRegexExtractionActions(true)
+  } catch (error) {
+    regexExtractSummary.classList.add('status-error')
+    regexExtractSummary.textContent = error instanceof Error ? error.message : String(error)
+    setRegexExtractionActions(false)
+  }
+}
+
+function queueRegexExtractRefresh(delay?: number): void {
+  if (regexExtract.hidden) return
+
+  if (regexExtractTimer !== null) {
+    window.clearTimeout(regexExtractTimer)
+  }
+
+  const wait = delay ?? (documentState.largeFileMode ? 300 : 120)
+  regexExtractTimer = window.setTimeout(renderRegexExtract, wait)
+}
+
+function openRegexExtract(): void {
+  if (compareView && !compareView.hidden) closeCompare()
+  if (!lineFilter.hidden) closeLineFilter()
+
+  regexExtract.hidden = false
+  renderRegexExtract()
+  regexExtractPattern.focus()
+  regexExtractPattern.select()
+}
+
+function closeRegexExtract(focusEditor = true): void {
+  if (regexExtractTimer !== null) {
+    window.clearTimeout(regexExtractTimer)
+    regexExtractTimer = null
+  }
+
+  regexExtract.hidden = true
+
+  if (focusEditor) editor.focus()
+}
+
+async function copyRegexExtraction(): Promise<void> {
+  try {
+    const result = currentRegexExtraction()
+
+    if (result.matchCount === 0) {
+      showTransientStatus('No regex matches to copy')
+      return
+    }
+
+    await window.api.writeClipboardText(result.text)
+
+    showTransientStatus(
+      `${result.matchCount} extracted ${result.matchCount === 1 ? 'value' : 'values'} copied`
+    )
+  } catch (error) {
+    showTransientStatus(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
+function replaceWithRegexExtraction(): void {
+  runSelectionTransform(
+    'regex-extract-replace',
+    (text) => {
+      const result = extractRegex(
+        text,
+        {
+          pattern: regexExtractPattern.value,
+          caseSensitive: regexExtractCase.checked,
+          captureGroup: regexExtractGroup.valueAsNumber
+        },
+        modelEol()
+      )
+
+      if (result.matchCount === 0) {
+        throw new Error('No regex matches in one or more source ranges')
+      }
+
+      return result.text
+    },
+    {
+      wholeDocumentFallback: true,
+      kind: 'Regex extraction failed'
+    }
+  )
+}
+
+async function openRegexExtractionAsUntitled(): Promise<void> {
+  let result: CurrentRegexExtraction
+
+  try {
+    result = currentRegexExtraction()
+  } catch (error) {
+    showTransientStatus(error instanceof Error ? error.message : String(error), true)
+    return
+  }
+
+  if (result.matchCount === 0) {
+    showTransientStatus('No regex matches to open')
+    return
+  }
+
+  if (!(await newDocument())) return
+
+  model.setValue(result.text)
+  closeRegexExtract()
+
+  showTransientStatus(
+    `${result.matchCount} extracted ${result.matchCount === 1 ? 'value' : 'values'} opened as Untitled`
+  )
+}
+
+regexExtractPattern.addEventListener('input', () => {
+  queueRegexExtractRefresh()
+})
+
+regexExtractCase.addEventListener('change', () => {
+  queueRegexExtractRefresh(0)
+})
+
+regexExtractGroup.addEventListener('input', () => {
+  queueRegexExtractRefresh()
+})
+
+regexExtractCopy.addEventListener('click', () => {
+  void copyRegexExtraction()
+})
+
+regexExtractReplace.addEventListener('click', replaceWithRegexExtraction)
+
+regexExtractUntitled.addEventListener('click', () => {
+  runDocumentAction(openRegexExtractionAsUntitled)
+})
+
+regexExtractClose.addEventListener('click', () => {
+  closeRegexExtract()
+})
+
+regexExtract.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeRegexExtract()
+  }
+})
+
+editor.onDidChangeCursorSelection(() => {
+  queueRegexExtractRefresh(50)
+})
+
 lineFilterQuery.addEventListener('input', () => {
   queueLineFilterRefresh()
 })
@@ -732,6 +1030,8 @@ model.onDidChangeContent(() => {
   if (!followApplying) {
     queueLineFilterRefresh()
   }
+
+  queueRegexExtractRefresh()
 })
 
 function syncFollowMenu(): void {
@@ -836,6 +1136,10 @@ function executeReplacement(range: monaco.Range, text: string, source: string): 
   editor.executeEdits(source, [{ range, text }])
   editor.pushUndoStop()
   editor.focus()
+}
+
+function modelEol(): '\n' | '\r\n' {
+  return model.getEOL() === '\r\n' ? '\r\n' : '\n'
 }
 
 function wholeDocumentRange(): monaco.Range {
@@ -1005,6 +1309,40 @@ function runTransformCommand(command: string): void {
       break
     case 'transform:hex-decode':
       runSelectionTransform(command, decodeHex, { kind: 'Hex decode failed' })
+      break
+    case 'transform:reflow-72':
+      runSelectionTransform(command, (text) => reflowParagraphs(text, 72, modelEol()), {
+        kind: 'Reflow failed'
+      })
+      break
+    case 'transform:reflow-80':
+      runSelectionTransform(command, (text) => reflowParagraphs(text, 80, modelEol()), {
+        kind: 'Reflow failed'
+      })
+      break
+    case 'transform:normalize-nfc':
+      runSelectionTransform(command, (text) => normalizeUnicode(text, 'NFC'), {
+        wholeDocumentFallback: true,
+        kind: 'Unicode normalization failed'
+      })
+      break
+    case 'transform:normalize-nfd':
+      runSelectionTransform(command, (text) => normalizeUnicode(text, 'NFD'), {
+        wholeDocumentFallback: true,
+        kind: 'Unicode normalization failed'
+      })
+      break
+    case 'transform:normalize-nfkc':
+      runSelectionTransform(command, (text) => normalizeUnicode(text, 'NFKC'), {
+        wholeDocumentFallback: true,
+        kind: 'Unicode normalization failed'
+      })
+      break
+    case 'transform:normalize-nfkd':
+      runSelectionTransform(command, (text) => normalizeUnicode(text, 'NFKD'), {
+        wholeDocumentFallback: true,
+        kind: 'Unicode normalization failed'
+      })
       break
   }
 }
@@ -1755,7 +2093,7 @@ async function confirmUnsavedChanges(): Promise<boolean> {
   return (await saveDocument()) && !isDocumentDirty(model, documentState)
 }
 
-async function newDocument(): Promise<void> {
+async function newDocument(): Promise<boolean> {
   await leaveFollowMode()
   closeCompare()
   if (documentState.filePath && positionTimer !== null) {
@@ -1765,7 +2103,7 @@ async function newDocument(): Promise<void> {
   }
 
   if (!(await confirmUnsavedChanges())) {
-    return
+    return false
   }
 
   documentGeneration++
@@ -1803,6 +2141,7 @@ async function newDocument(): Promise<void> {
   updateStatistics()
   syncFollowMenu()
   editor.focus()
+  return true
 }
 
 function loadDocument(result: NonNullable<Awaited<ReturnType<typeof window.api.openFile>>>): void {
@@ -2384,6 +2723,13 @@ const modifyingCommands: string[] = [
   'spaces-to-tabs',
   'sort-lines-asc',
   'sort-lines-desc',
+  'sort-lines-natural-asc',
+  'sort-lines-natural-desc',
+  'sort-lines-numeric-asc',
+  'sort-lines-numeric-desc',
+  'reverse-lines',
+  'join-lines',
+  'split-lines-commas',
   'remove-duplicate-lines',
   'delete-empty-lines',
   'trim-trailing-whitespace',
@@ -2483,6 +2829,12 @@ window.api.onMenuCommand((command) => {
     case 'transform:url-decode':
     case 'transform:hex-encode':
     case 'transform:hex-decode':
+    case 'transform:reflow-72':
+    case 'transform:reflow-80':
+    case 'transform:normalize-nfc':
+    case 'transform:normalize-nfd':
+    case 'transform:normalize-nfkc':
+    case 'transform:normalize-nfkd':
       runTransformCommand(command)
       break
     case 'hash:sha256':
@@ -2553,6 +2905,43 @@ window.api.onMenuCommand((command) => {
     case 'sort-lines-desc':
       transformRange((text) => sortLines(text, true), true, 'sort-lines-descending')
       break
+    case 'sort-lines-natural-asc':
+      transformRange((text) => naturalSortLines(text), true, 'sort-lines-natural-ascending')
+      break
+    case 'sort-lines-natural-desc':
+      transformRange((text) => naturalSortLines(text, true), true, 'sort-lines-natural-descending')
+      break
+    case 'sort-lines-numeric-asc':
+      try {
+        transformRange((text) => numericSortLines(text), true, 'sort-lines-numeric-ascending')
+      } catch (error) {
+        showTransientStatus(conciseTransformError('Numeric sort failed', error), true)
+      }
+      break
+    case 'sort-lines-numeric-desc':
+      try {
+        transformRange(
+          (text) => numericSortLines(text, true),
+          true,
+          'sort-lines-numeric-descending'
+        )
+      } catch (error) {
+        showTransientStatus(conciseTransformError('Numeric sort failed', error), true)
+      }
+      break
+    case 'reverse-lines':
+      if (documentState.largeFileMode && editor.getSelection()?.isEmpty()) {
+        showTransientStatus('Whole-document transform unavailable in Large File Mode', true)
+        break
+      }
+      transformRange(reverseLines, false, 'reverse-lines')
+      break
+    case 'join-lines':
+      transformRange(joinLines, true, 'join-lines')
+      break
+    case 'split-lines-commas':
+      transformRange((text) => splitLinesAtCommas(text, modelEol()), true, 'split-lines-commas')
+      break
     case 'remove-duplicate-lines':
       transformRange(removeDuplicateLines, true, 'remove-duplicate-lines')
       break
@@ -2598,6 +2987,9 @@ window.api.onMenuCommand((command) => {
       break
     case 'filter-lines':
       openLineFilter()
+      break
+    case 'regex-extract':
+      openRegexExtract()
       break
     case 'find':
       editor.trigger('menu', 'actions.find', null)

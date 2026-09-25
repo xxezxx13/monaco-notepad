@@ -20,6 +20,12 @@ const {
   indentationSpacesToTabs,
   removeDuplicateLines,
   sortLines,
+  naturalSortLines,
+  numericSortLines,
+  reverseLines,
+  joinLines,
+  splitLinesAtCommas,
+  reflowParagraphs,
   tabsToSpaces,
   trimTrailingWhitespace
 } = module.exports
@@ -35,6 +41,29 @@ test('text cleanup and deterministic line operations', () => {
   assert.equal(sortLines('beta\nAlpha\ngamma', true), 'gamma\nbeta\nAlpha')
   assert.equal(removeDuplicateLines('one\ntwo\none\nOne'), 'one\ntwo\nOne')
   assert.equal(deleteEmptyLines('one\n \n\t\ntwo'), 'one\ntwo')
+})
+
+test('extended line ordering is deterministic and preserves final EOL', () => {
+  assert.equal(naturalSortLines('item10\nitem2\nItem1\nitem02\n'), 'Item1\nitem2\nitem02\nitem10\n')
+  assert.equal(naturalSortLines('item10\nitem2\nItem1', true), 'item10\nitem2\nItem1')
+
+  assert.equal(numericSortLines('10\n2\n-1\n2.5\n'), '-1\n2\n2.5\n10\n')
+  assert.equal(numericSortLines('10\n2\n-1\n2.5', true), '10\n2.5\n2\n-1')
+  assert.throws(() => numericSortLines('1\nnot-a-number\n3'), /finite decimal number per line/)
+
+  assert.equal(reverseLines('one\ntwo\nthree\n'), 'three\ntwo\none\n')
+})
+
+test('join, comma split, and paragraph reflow have explicit boundaries', () => {
+  assert.equal(joinLines('  one  \n    two\nthree'), '  one two three')
+  assert.equal(splitLinesAtCommas('one, two,, four', '\r\n'), 'one\r\ntwo\r\n\r\nfour')
+
+  assert.equal(
+    reflowParagraphs('  one two three four\nfive six\n\nseven eight', 12, '\n'),
+    '  one two\n  three four\n  five six\n\nseven eight'
+  )
+
+  assert.throws(() => reflowParagraphs('text', 4), /10 to 1000/)
 })
 
 test('tab conversion respects tab stops and only tabifies indentation', () => {
@@ -60,4 +89,10 @@ test('case conversion is deterministic and Unicode aware', () => {
   assert.equal(convertCase('Café déjà VU', 'upper'), 'CAFÉ DÉJÀ VU')
   assert.equal(convertCase('Café déjà VU', 'lower'), 'café déjà vu')
   assert.equal(convertCase("hELLO o'NEILL ÉLAN", 'title'), "Hello O'neill Élan")
+})
+
+test('descending sorts preserve equal-key source order', () => {
+  assert.equal(naturalSortLines('item2\nItem2\nitem10', true), 'item10\nitem2\nItem2')
+
+  assert.equal(numericSortLines('2\n2.0\n10', true), '10\n2\n2.0')
 })

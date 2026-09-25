@@ -176,6 +176,13 @@ export function installMenu(window: BrowserWindow): void {
             ['Move Line Down', 'move-line-down'],
             ['Sort Lines Ascending', 'sort-lines-asc'],
             ['Sort Lines Descending', 'sort-lines-desc'],
+            ['Natural Sort Ascending', 'sort-lines-natural-asc'],
+            ['Natural Sort Descending', 'sort-lines-natural-desc'],
+            ['Numeric Sort Ascending', 'sort-lines-numeric-asc'],
+            ['Numeric Sort Descending', 'sort-lines-numeric-desc'],
+            ['Reverse Lines', 'reverse-lines'],
+            ['Join Lines', 'join-lines'],
+            ['Split at Commas', 'split-lines-commas'],
             ['Remove Duplicate Lines', 'remove-duplicate-lines'],
             ['Delete Empty Lines', 'delete-empty-lines']
           ].map(([label, command]) => ({
@@ -235,6 +242,29 @@ export function installMenu(window: BrowserWindow): void {
             })),
             { type: 'separator' },
             {
+              label: 'Reflow Selection',
+              submenu: [
+                ['72 Columns', 'transform:reflow-72'],
+                ['80 Columns', 'transform:reflow-80']
+              ].map(([label, command]) => ({
+                label,
+                click: () => window.webContents.send('menu:command', command)
+              }))
+            },
+            {
+              label: 'Normalize Unicode',
+              submenu: [
+                ['NFC', 'transform:normalize-nfc'],
+                ['NFD', 'transform:normalize-nfd'],
+                ['NFKC', 'transform:normalize-nfkc'],
+                ['NFKD', 'transform:normalize-nfkd']
+              ].map(([label, command]) => ({
+                label,
+                click: () => window.webContents.send('menu:command', command)
+              }))
+            },
+            { type: 'separator' },
+            {
               label: 'Compute Selection Hash',
               submenu: [
                 ['SHA-256 (Copy)', 'hash:sha256'],
@@ -268,6 +298,10 @@ export function installMenu(window: BrowserWindow): void {
           label: 'Filter Lines...',
           accelerator: 'CmdOrCtrl+Shift+F',
           click: () => window.webContents.send('menu:command', 'filter-lines')
+        },
+        {
+          label: 'Regex Extract...',
+          click: () => window.webContents.send('menu:command', 'regex-extract')
         },
         {
           label: 'Find...',

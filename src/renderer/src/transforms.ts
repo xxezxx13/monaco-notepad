@@ -72,6 +72,12 @@ export function decodeHex(text: string): string {
   return decodeUtf8(bytes)
 }
 
+export type UnicodeNormalizationForm = 'NFC' | 'NFD' | 'NFKC' | 'NFKD'
+
+export function normalizeUnicode(text: string, form: UnicodeNormalizationForm): string {
+  return text.normalize(form)
+}
+
 type XmlNode =
   | { type: 'text'; raw: string }
   | { type: 'raw'; raw: string }

@@ -101,6 +101,24 @@ async function setLineFilterControls({
   await delay(250)
 }
 
+async function setRegexExtractControls({ pattern, caseSensitive = false, captureGroup = 0 }) {
+  await evaluate(`(() => {
+    const pattern = document.getElementById('regex-extract-pattern')
+    const caseSensitive = document.getElementById('regex-extract-case')
+    const captureGroup = document.getElementById('regex-extract-group')
+
+    pattern.value = ${JSON.stringify(pattern)}
+    caseSensitive.checked = ${caseSensitive}
+    captureGroup.value = ${JSON.stringify(String(captureGroup))}
+
+    pattern.dispatchEvent(new Event('input', { bubbles: true }))
+    caseSensitive.dispatchEvent(new Event('change', { bubbles: true }))
+    captureGroup.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+
+  await delay(250)
+}
+
 async function press(keyCode, modifiers = []) {
   window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
@@ -939,6 +957,127 @@ async function run() {
     'PASS Filter Lines literal, case, regex, invert, navigation, clipboard, and source preservation'
   )
 
+  const extractionFixture = 'ID=12 id=7 nope'
+  await setText(extractionFixture)
+  await evaluate(`editor.setSelection(new monaco.Selection(1, 1, 1, 1))`)
+
+  await click('Regex Extract...')
+  await until(`!document.getElementById('regex-extract').hidden`, 'Regex Extract menu command')
+  assert.equal(await evaluate(`document.activeElement?.id`), 'regex-extract-pattern')
+
+  // Full-match extraction to the clipboard.
+  await setRegexExtractControls({
+    pattern: 'id=(\\d+)',
+    caseSensitive: false,
+    captureGroup: 0
+  })
+  await until(
+    `/2 values from document/.test(document.getElementById('regex-extract-summary').innerText)`,
+    'Regex Extract full-match summary'
+  )
+
+  clipboard.writeText('')
+  await evaluate(`document.getElementById('regex-extract-copy').click()`)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText() === 'ID=12\nid=7') break
+    await delay(50)
+  }
+  assert.equal(clipboard.readText(), 'ID=12\nid=7')
+  assert.equal(await evaluate(`editor.getValue()`), extractionFixture)
+
+  // Capture-group extraction uses the requested group, not full matches.
+  await setRegexExtractControls({
+    pattern: 'id=(\\d+)',
+    caseSensitive: false,
+    captureGroup: 1
+  })
+
+  clipboard.writeText('')
+  await evaluate(`document.getElementById('regex-extract-copy').click()`)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText() === '12\n7') break
+    await delay(50)
+  }
+  assert.equal(clipboard.readText(), '12\n7')
+  assert.equal(await evaluate(`editor.getValue()`), extractionFixture)
+
+  // Invalid regex must expose an error, disable destinations, and mutate nothing.
+  await setRegexExtractControls({
+    pattern: '[',
+    captureGroup: 0
+  })
+  await until(
+    `/Invalid regular expression/.test(document.getElementById('regex-extract-summary').innerText)`,
+    'Regex Extract invalid regex'
+  )
+  assert.equal(await evaluate(`document.getElementById('regex-extract-copy').disabled`), true)
+  assert.equal(await evaluate(`document.getElementById('regex-extract-replace').disabled`), true)
+  assert.equal(await evaluate(`document.getElementById('regex-extract-untitled').disabled`), true)
+  assert.equal(await evaluate(`editor.getValue()`), extractionFixture)
+
+  // Two selected ranges must validate first, replace atomically, and undo in one step.
+  const extractionAtomicFixture = 'A1 B2\nC3 D4'
+  await setText(extractionAtomicFixture)
+  await evaluate(`editor.setSelections([
+    new monaco.Selection(1, 1, 1, 6),
+    new monaco.Selection(2, 1, 2, 6)
+  ])`)
+
+  await setRegexExtractControls({
+    pattern: '([A-Z])(\\d)',
+    caseSensitive: true,
+    captureGroup: 2
+  })
+  await until(
+    `/4 values from 2 selections/.test(document.getElementById('regex-extract-summary').innerText)`,
+    'Regex Extract multi-selection summary'
+  )
+
+  await evaluate(`document.getElementById('regex-extract-replace').click()`)
+  await until(
+    `editor.getValue() === ${JSON.stringify('1\n2\n3\n4')}`,
+    'Regex Extract atomic replacement'
+  )
+
+  await click('Undo')
+  await until(
+    `editor.getValue() === ${JSON.stringify(extractionAtomicFixture)}`,
+    'Regex Extract one-step undo'
+  )
+
+  // Open-as-Untitled must use the normal dirty-document lifecycle.
+  response = 2
+  await evaluate(`document.getElementById('regex-extract-untitled').click()`)
+  await delay(250)
+
+  assert.equal(await evaluate(`editor.getValue()`), extractionAtomicFixture)
+  assert.equal(await evaluate(`document.getElementById('regex-extract').hidden`), false)
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+
+  response = 1
+  await evaluate(`document.getElementById('regex-extract-untitled').click()`)
+  await until(
+    `editor.getValue() === ${JSON.stringify('1\n2\n3\n4')} &&
+     document.title.includes('Untitled') &&
+     document.title.startsWith('*') &&
+     document.getElementById('regex-extract').hidden`,
+    'Regex Extract guarded Open as Untitled'
+  )
+
+  // Leave a clean baseline for the existing Follow File runtime section.
+  response = 1
+  await click('New')
+  await until(
+    `editor.getValue() === '' &&
+     document.title.includes('Untitled') &&
+     !document.title.startsWith('*')`,
+    'Regex Extract cleanup document'
+  )
+
+  console.log(
+    'PASS Regex Extract full match, capture group, invalid-input safety, atomic replace/undo, clipboard, and guarded Untitled routing'
+  )
+
   const followedPath = path.join(temporary, 'follow.log')
   await fs.writeFile(
     followedPath,
@@ -1172,7 +1311,30 @@ async function run() {
     await evaluate(`document.getElementById('transient-status').innerText`),
     /Large File Mode/
   )
-  console.log('PASS large-file Cancel/Open without truncation and whole-document transform guard')
+  await click('Regex Extract...')
+  await until(
+    `!document.getElementById('regex-extract').hidden`,
+    'Regex Extract Large File Mode open'
+  )
+  await until(
+    `/Select text for Regex Extract in Large File Mode/.test(
+      document.getElementById('regex-extract-summary').innerText
+    )`,
+    'Regex Extract Large File Mode whole-document guard'
+  )
+  assert.equal(await evaluate(`document.getElementById('regex-extract-copy').disabled`), true)
+  assert.equal(await evaluate(`document.getElementById('regex-extract-replace').disabled`), true)
+  assert.equal(await evaluate(`document.getElementById('regex-extract-untitled').disabled`), true)
+  assert.equal(await evaluate(`editor.getModel().getValueLength()`), 20 * 1024 * 1024)
+  await evaluate(`document.getElementById('regex-extract-close').click()`)
+  await until(
+    `document.getElementById('regex-extract').hidden`,
+    'Regex Extract Large File Mode close'
+  )
+
+  console.log(
+    'PASS large-file Cancel/Open, whole-document transform guard, and Regex Extract scan guard'
+  )
 
   for (const width of [900, 400, 1400]) {
     window.setSize(width, 600)

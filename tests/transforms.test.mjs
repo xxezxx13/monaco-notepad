@@ -29,7 +29,8 @@ const {
   encodeUrl,
   decodeUrl,
   encodeHex,
-  decodeHex
+  decodeHex,
+  normalizeUnicode
 } = module.exports
 
 test('JSON formatting and minification preserve values and indentation', () => {
@@ -76,4 +77,11 @@ test('hex transforms use lowercase UTF-8 and reject invalid bytes', () => {
   assert.throws(() => decodeHex('abc'), /Invalid hexadecimal/)
   assert.throws(() => decodeHex('gg'), /Invalid hexadecimal/)
   assert.throws(() => decodeHex('ff'), /valid UTF-8/)
+})
+
+test('Unicode normalization is explicit across all supported forms', () => {
+  assert.equal(normalizeUnicode('e\u0301', 'NFC'), '\u00e9')
+  assert.equal(normalizeUnicode('\u00e9', 'NFD'), 'e\u0301')
+  assert.equal(normalizeUnicode('\uff21', 'NFKC'), 'A')
+  assert.equal(normalizeUnicode('\uff21', 'NFKD'), 'A')
 })
