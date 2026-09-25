@@ -24,6 +24,7 @@ export function saveFilePosition(filePath: string, position: FilePosition): void
 
 export interface Preferences {
   wordWrap: boolean
+  typewriterScrolling: boolean
   zoomLevel: number
   statusBarVisible: boolean
   showWhitespace: boolean
@@ -52,6 +53,7 @@ export interface Preferences {
 export const preferences = new Store<Preferences>({
   defaults: {
     wordWrap: false,
+    typewriterScrolling: false,
     zoomLevel: 0,
     statusBarVisible: true,
     showWhitespace: false,

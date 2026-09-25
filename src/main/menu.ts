@@ -525,6 +525,15 @@ export function installMenu(window: BrowserWindow): void {
           checked: false,
           click: () => window.webContents.send('menu:command', 'follow-file')
         },
+        {
+          label: 'Typewriter Scrolling',
+          type: 'checkbox',
+          checked: preferences.get('typewriterScrolling'),
+          click: (item) => {
+            preferences.set('typewriterScrolling', item.checked)
+            window.webContents.send('menu:typewriter-scrolling', item.checked)
+          }
+        },
         { type: 'separator' },
         {
           label: 'Appearance',

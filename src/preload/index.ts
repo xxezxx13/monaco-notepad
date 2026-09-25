@@ -363,6 +363,17 @@ const api = {
     }
   },
 
+  onTypewriterScrolling: (callback: (enabled: boolean) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, enabled: boolean): void =>
+      callback(enabled)
+
+    ipcRenderer.on('menu:typewriter-scrolling', listener)
+
+    return () => {
+      ipcRenderer.removeListener('menu:typewriter-scrolling', listener)
+    }
+  },
+
   onShowWhitespace: (callback: (enabled: boolean) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, enabled: boolean): void =>
       callback(enabled)

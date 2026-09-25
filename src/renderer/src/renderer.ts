@@ -557,6 +557,7 @@ let editorPreferences = {
 }
 let statusBarPreference = true
 let wordWrapPreference = false
+let typewriterScrollingPreference = false
 let primarySelectionPaste = false
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null
 let diskCompareModel: monaco.editor.ITextModel | null = null
@@ -1063,6 +1064,15 @@ function setShowLineNumbers(enabled: boolean): void {
     lineNumbersMinChars: enabled ? 3 : 0,
     lineDecorationsWidth: enabled ? 18 : 10
   })
+}
+
+function centerActiveCursorForTypewriter(): void {
+  if (!typewriterScrollingPreference || followActive) return
+
+  const position = editor.getPosition()
+  if (!position) return
+
+  editor.revealLineInCenter(position.lineNumber)
 }
 
 function setLargeFileMode(enabled: boolean): void {
@@ -2435,6 +2445,7 @@ model.onDidChangeContent(() => {
 editor.onDidChangeCursorPosition(() => {
   updateStatusBar()
   schedulePositionSave()
+  centerActiveCursorForTypewriter()
 })
 editor.onDidChangeCursorSelection(updateSelectionCount)
 editor.onDidChangeCursorSelection(() => {
@@ -2702,6 +2713,11 @@ window.api.onWordWrap((enabled) => {
   editor.updateOptions({
     wordWrap: enabled ? 'on' : 'off'
   })
+})
+
+window.api.onTypewriterScrolling((enabled) => {
+  typewriterScrollingPreference = enabled
+  if (enabled) centerActiveCursorForTypewriter()
 })
 
 window.api.onShowWhitespace(setShowWhitespace)
@@ -3121,6 +3137,7 @@ void window.api.preferences.getAll().then((preferences) => {
   setShowWhitespace(preferences.showWhitespace)
   setShowLineNumbers(preferences.showLineNumbers)
   wordWrapPreference = preferences.wordWrap
+  typewriterScrollingPreference = preferences.typewriterScrolling
   editor.updateOptions({
     wordWrap: wordWrapPreference ? 'on' : 'off'
   })
@@ -3169,6 +3186,10 @@ window.api.onPreferencesChanged((changes) => {
   if (changes.wordWrap !== undefined) {
     wordWrapPreference = changes.wordWrap
     editor.updateOptions({ wordWrap: changes.wordWrap ? 'on' : 'off' })
+  }
+  if (changes.typewriterScrolling !== undefined) {
+    typewriterScrollingPreference = changes.typewriterScrolling
+    if (changes.typewriterScrolling) centerActiveCursorForTypewriter()
   }
   if (changes.statusBarVisible !== undefined) {
     statusBarPreference = changes.statusBarVisible

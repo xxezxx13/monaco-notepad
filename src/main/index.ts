@@ -512,6 +512,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('preferences:get-all', () => ({
     wordWrap: preferences.get('wordWrap'),
+    typewriterScrolling: preferences.get('typewriterScrolling'),
     zoomLevel: preferences.get('zoomLevel'),
     statusBarVisible: preferences.get('statusBarVisible'),
     showWhitespace: preferences.get('showWhitespace'),
@@ -547,6 +548,7 @@ app.whenReady().then(() => {
     }
     const menuKeys: (keyof Preferences)[] = [
       'wordWrap',
+      'typewriterScrolling',
       'showWhitespace',
       'showLineNumbers',
       'statusBarVisible',

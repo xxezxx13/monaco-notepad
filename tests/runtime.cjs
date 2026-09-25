@@ -1078,6 +1078,66 @@ async function run() {
     'PASS Regex Extract full match, capture group, invalid-input safety, atomic replace/undo, clipboard, and guarded Untitled routing'
   )
 
+  const typewriterFixture = Array.from(
+    { length: 120 },
+    (_, index) => `typewriter line ${index + 1}`
+  ).join('\n')
+
+  await setText(typewriterFixture)
+  await click('Typewriter Scrolling')
+
+  await evaluate(`editor.setPosition({ lineNumber: 80, column: 1 })`)
+  await until(
+    `(() => {
+      const position = editor.getScrolledVisiblePosition({ lineNumber: 80, column: 1 })
+      return position !== null &&
+        Math.abs(
+          position.top + position.height / 2 -
+          editor.getLayoutInfo().height / 2
+        ) < 80
+    })()`,
+    'Typewriter cursor centering'
+  )
+
+  // Manual scrolling must remain manual until the cursor itself moves.
+  await evaluate(`editor.setScrollTop(0)`)
+  await delay(250)
+  assert.equal(await evaluate(`editor.getScrollTop()`), 0)
+
+  // A restored file position must win over the cursor-change centering
+  // triggered by setPosition during document restoration.
+  const typewriterPositionPath = path.join(temporary, 'typewriter-position.txt')
+  await fs.writeFile(
+    typewriterPositionPath,
+    Array.from({ length: 120 }, (_, index) => `stored line ${index + 1}`).join('\n')
+  )
+
+  await evaluate(`window.api.saveFilePosition(
+    ${JSON.stringify(typewriterPositionPath)},
+    {
+      line: 80,
+      column: 1,
+      scrollTop: 0,
+      accessedAt: Date.now()
+    }
+  )`)
+
+  openPath = typewriterPositionPath
+  response = 1
+  await click('Open...')
+  await until(
+    `document.title === 'typewriter-position.txt - Monaco Notepad'`,
+    'Typewriter stored-position fixture open'
+  )
+  await until(`editor.getPosition()?.lineNumber === 80`, 'Typewriter stored cursor restore')
+  await delay(250)
+
+  assert.equal(await evaluate(`editor.getScrollTop()`), 0)
+
+  console.log(
+    'PASS Typewriter Scrolling cursor centering, manual-scroll freedom, and stored-position precedence'
+  )
+
   const followedPath = path.join(temporary, 'follow.log')
   await fs.writeFile(
     followedPath,
@@ -1354,6 +1414,7 @@ async function run() {
   )
   assert.equal(preferences.showWhitespace, true)
   assert.equal(preferences.showLineNumbers, false)
+  assert.equal(preferences.typewriterScrolling, true)
   assert.equal(preferences.reopenLastDocument, true)
   assert.equal(preferences.tabSize, 8)
   assert.equal(preferences.insertSpaces, false)
