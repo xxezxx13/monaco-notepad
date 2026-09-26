@@ -1,32 +1,3 @@
-:root,
-:root[data-theme='light'] {
-  color-scheme: light;
-  --bg-app: #ffffff;
-  --bg-editor: #ffffff;
-  --bg-raised: #f6f6f6;
-  --bg-control: #ffffff;
-  --text-primary: #000000;
-  --text-secondary: #404040;
-  --accent: #0066cc;
-  --accent-soft: rgba(0, 102, 204, 0.16);
-  --border: #b8b8b8;
-  --status-bg: #eeeeee;
-}
-
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --bg-app: #101722;
-  --bg-editor: #0c121b;
-  --bg-raised: #182231;
-  --bg-control: #131c29;
-  --text-primary: #dce5f2;
-  --text-secondary: #8796aa;
-  --accent: #2588e8;
-  --accent-soft: rgba(37, 136, 232, 0.22);
-  --border: #283546;
-  --status-bg: #141d29;
-}
-
 html,
 body,
 #app {

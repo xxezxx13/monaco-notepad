@@ -104,9 +104,10 @@ function beginOpenRequest(
 }
 
 function sendPortalTheme(theme: PortalTheme): void {
-  if (preferences.get('theme') === 'system' && mainWindow) {
-    mainWindow.webContents.send('theme:portal-changed', theme)
-  }
+  if (preferences.get('theme') !== 'system') return
+
+  mainWindow?.webContents.send('theme:portal-changed', theme)
+  preferencesWindow?.webContents.send('theme:portal-changed', theme)
 }
 
 function startPortalThemeMonitor(): void {
@@ -438,8 +439,8 @@ function createPreferencesWindow(): void {
     minHeight: 480,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#ffffff',
-    darkTheme: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#101722' : '#ffffff',
+    darkTheme: nativeTheme.shouldUseDarkColors,
     icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -459,7 +460,7 @@ function createPreferencesWindow(): void {
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     preferencesWindow.loadURL(
-      `${process.env['ELECTRON_RENDERER_URL']}/preferences/preferences.html`
+      new URL('preferences/preferences.html', process.env['ELECTRON_RENDERER_URL']).toString()
     )
   } else {
     preferencesWindow.loadFile(join(__dirname, '../renderer/preferences/preferences.html'))
@@ -548,9 +549,10 @@ app.whenReady().then(() => {
   nativeTheme.themeSource = preferences.get('theme')
 
   nativeTheme.on('updated', () => {
-    if (preferences.get('theme') === 'system' && mainWindow) {
-      mainWindow.webContents.send('theme:system-changed')
-    }
+    if (preferences.get('theme') !== 'system') return
+
+    mainWindow?.webContents.send('theme:system-changed')
+    preferencesWindow?.webContents.send('theme:system-changed')
   })
   queryPortalTheme()
   startPortalThemeMonitor()
@@ -593,6 +595,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('preferences:set', (_event, key: keyof Preferences, value: unknown) => {
     preferences.set(key, value)
+
+    if (key === 'theme' && (value === 'system' || value === 'light' || value === 'dark')) {
+      nativeTheme.themeSource = value
+    }
+
     if (mainWindow) {
       mainWindow.webContents.send('preferences:changed', { [key]: value })
     }
@@ -610,7 +617,8 @@ app.whenReady().then(() => {
       'insertSpaces',
       'autoIndent',
       'trimTrailingWhitespaceOnSave',
-      'largeFileWarningMiB'
+      'largeFileWarningMiB',
+      'theme'
     ]
     if (menuKeys.includes(key)) {
       installMenu(mainWindow!)

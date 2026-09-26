@@ -1,9 +1,18 @@
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme } from 'electron'
 import { existsSync } from 'node:fs'
 import { preferences } from './preferences'
 import type { BomlessFileEncoding } from './files'
 
 const maximumRecentFiles = 10
+
+function setThemePreference(theme: 'system' | 'light' | 'dark'): void {
+  preferences.set('theme', theme)
+  nativeTheme.themeSource = theme
+
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    browserWindow.webContents.send('preferences:changed', { theme })
+  }
+}
 
 function existingRecentFiles(): string[] {
   const recentFiles = preferences.get('recentFiles').filter((filePath) => existsSync(filePath))
@@ -552,28 +561,19 @@ export function installMenu(window: BrowserWindow): void {
               label: 'System',
               type: 'radio',
               checked: preferences.get('theme') === 'system',
-              click: () => {
-                preferences.set('theme', 'system')
-                window.webContents.send('preferences:changed', { theme: 'system' })
-              }
+              click: () => setThemePreference('system')
             },
             {
               label: 'Light',
               type: 'radio',
               checked: preferences.get('theme') === 'light',
-              click: () => {
-                preferences.set('theme', 'light')
-                window.webContents.send('preferences:changed', { theme: 'light' })
-              }
+              click: () => setThemePreference('light')
             },
             {
               label: 'Dark',
               type: 'radio',
               checked: preferences.get('theme') === 'dark',
-              click: () => {
-                preferences.set('theme', 'dark')
-                window.webContents.send('preferences:changed', { theme: 'dark' })
-              }
+              click: () => setThemePreference('dark')
             }
           ]
         },

@@ -1,0 +1,106 @@
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --surface-window: #ffffff;
+  --surface-editor: #ffffff;
+  --surface-raised: #f6f6f6;
+  --surface-control: #ffffff;
+  --surface-status: #eeeeee;
+  --surface-overlay: rgba(0, 0, 0, 0.35);
+
+  --border-subtle: #b8b8b8;
+  --border-strong: #808080;
+
+  --text-primary: #000000;
+  --text-secondary: #404040;
+  --text-disabled: #707070;
+
+  --accent: #0066cc;
+  --accent-hover: #0057ad;
+  --accent-soft: rgba(0, 102, 204, 0.16);
+  --danger: #c42b1c;
+  --warning: #c56c00;
+  --success: #107c10;
+
+  --radius-control: 4px;
+  --radius-overlay: 8px;
+
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 14px;
+  --space-6: 20px;
+
+  --ui-font-size: 12px;
+  --status-font-size: 12px;
+  --control-height: 28px;
+
+  --motion-fast: 100ms;
+  --motion-standard: 140ms;
+
+  /* Compatibility aliases allow gradual V3 surface migration. */
+  --bg-app: var(--surface-window);
+  --bg-editor: var(--surface-editor);
+  --bg-raised: var(--surface-raised);
+  --bg-control: var(--surface-control);
+  --status-bg: var(--surface-status);
+  --border: var(--border-subtle);
+
+  --bg: var(--surface-window);
+  --text: var(--text-primary);
+  --section-bg: var(--surface-raised);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface-window: #101722;
+  --surface-editor: #0c121b;
+  --surface-raised: #182231;
+  --surface-control: #131c29;
+  --surface-status: #141d29;
+  --surface-overlay: rgba(0, 0, 0, 0.5);
+
+  --border-subtle: #283546;
+  --border-strong: #34445a;
+
+  --text-primary: #dce5f2;
+  --text-secondary: #8796aa;
+  --text-disabled: #617086;
+
+  --accent: #2588e8;
+  --accent-hover: #3d98ed;
+  --accent-soft: rgba(37, 136, 232, 0.22);
+  --danger: #ff766d;
+  --warning: #ffaa44;
+  --success: #6ccb7a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --surface-window: #101722;
+    --surface-editor: #0c121b;
+    --surface-raised: #182231;
+    --surface-control: #131c29;
+    --surface-status: #141d29;
+    --surface-overlay: rgba(0, 0, 0, 0.5);
+
+    --border-subtle: #283546;
+    --border-strong: #34445a;
+
+    --text-primary: #dce5f2;
+    --text-secondary: #8796aa;
+    --text-disabled: #617086;
+
+    --accent: #2588e8;
+    --accent-hover: #3d98ed;
+    --accent-soft: rgba(37, 136, 232, 0.22);
+    --danger: #ff766d;
+    --warning: #ffaa44;
+    --success: #6ccb7a;
+  }
+}

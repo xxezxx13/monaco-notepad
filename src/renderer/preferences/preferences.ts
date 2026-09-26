@@ -23,6 +23,16 @@ function setValue(element: HTMLInputElement | HTMLSelectElement, value: unknown)
 
 import type { Preferences } from '../../main/preferences'
 
+function applyTheme(theme: Preferences['theme'], portalTheme?: 'light' | 'dark' | null): void {
+  const resolved =
+    theme === 'system'
+      ? (portalTheme ??
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
+      : theme
+
+  document.documentElement.setAttribute('data-theme', resolved)
+}
+
 function bindBoolean(id: string, key: keyof Preferences): void {
   const element = $<HTMLInputElement>(id)
   if (!element) return
@@ -72,6 +82,7 @@ function bindRadio(name: string, key: keyof Preferences): void {
 
 async function loadPreferences(): Promise<void> {
   const preferences = await window.api.preferences.getAll()
+  applyTheme(preferences.theme)
 
   setValue($<HTMLInputElement>('font-family')!, preferences.fontFamily)
   setValue($<HTMLInputElement>('font-size')!, String(preferences.fontSize))
@@ -129,5 +140,26 @@ bindSelect('default-eol', 'defaultEol')
 
 bindBoolean('status-bar-visible', 'statusBarVisible')
 bindRadio('theme', 'theme')
+
+window.api.onPreferencesChanged((changes) => {
+  if (!changes.theme) return
+
+  applyTheme(changes.theme)
+  document
+    .querySelectorAll<HTMLInputElement>(`input[name="theme"]`)
+    .forEach((element) => (element.checked = changes.theme === element.value))
+})
+
+window.api.onSystemThemeChanged(() => {
+  void window.api.preferences.getAll().then((preferences) => {
+    if (preferences.theme === 'system') applyTheme('system')
+  })
+})
+
+window.api.onPortalThemeChanged((theme) => {
+  void window.api.preferences.getAll().then((preferences) => {
+    if (preferences.theme === 'system') applyTheme('system', theme)
+  })
+})
 
 void loadPreferences()

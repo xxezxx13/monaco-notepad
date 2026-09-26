@@ -1,7 +1,7 @@
 // Runs the actual sandboxed app with an isolated profile and temporary files.
 // Native dialogs are answered deterministically; no personal documents are touched.
 /* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, clipboard, dialog, Menu, shell } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, Menu, nativeTheme, shell } = require('electron')
 const assert = require('node:assert/strict')
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -32,6 +32,18 @@ async function evaluate(code) {
 async function until(code, description) {
   for (let attempt = 0; attempt < 120; attempt++) {
     if (await evaluate(code)) return
+    await delay(50)
+  }
+  throw new Error(`Timed out: ${description}`)
+}
+
+async function evaluateIn(targetWindow, code) {
+  return targetWindow.webContents.executeJavaScript(code, true)
+}
+
+async function untilIn(targetWindow, code, description) {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (await evaluateIn(targetWindow, code)) return
     await delay(50)
   }
   throw new Error(`Timed out: ${description}`)
@@ -170,6 +182,62 @@ async function run() {
   assert.equal(prefs.nodeIntegration, false)
   assert.equal(prefs.sandbox, true)
 
+  assert.equal(await evaluate(`document.documentElement.dataset.theme`), 'light')
+  assert.equal(nativeTheme.themeSource, 'light')
+
+  await evaluate(`window.api.openPreferencesDialog()`)
+
+  let preferencesWindow
+  for (let attempt = 0; attempt < 120; attempt++) {
+    preferencesWindow = BrowserWindow.getAllWindows().find((candidate) => candidate !== window)
+    if (preferencesWindow && !preferencesWindow.webContents.isLoading()) break
+    await delay(50)
+  }
+
+  assert.ok(preferencesWindow, 'Preferences window')
+  await untilIn(
+    preferencesWindow,
+    `document.documentElement.dataset.theme === 'light'`,
+    'Preferences initial light theme'
+  )
+
+  await evaluateIn(
+    preferencesWindow,
+    `(() => {
+      const input = document.querySelector('input[name="theme"][value="dark"]')
+      input.checked = true
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`
+  )
+
+  await until(`document.documentElement.dataset.theme === 'dark'`, 'main dark theme')
+  await untilIn(
+    preferencesWindow,
+    `document.documentElement.dataset.theme === 'dark'`,
+    'Preferences dark theme'
+  )
+  assert.equal(nativeTheme.themeSource, 'dark')
+  assert.equal(menuItem('Dark').checked, true)
+
+  await click('Light')
+  await until(`document.documentElement.dataset.theme === 'light'`, 'main light theme')
+  await untilIn(
+    preferencesWindow,
+    `document.documentElement.dataset.theme === 'light'`,
+    'Preferences light theme'
+  )
+  await untilIn(
+    preferencesWindow,
+    `document.querySelector('input[name="theme"][value="light"]').checked`,
+    'Preferences light theme radio'
+  )
+  assert.equal(nativeTheme.themeSource, 'light')
+
+  preferencesWindow.close()
+  await delay(150)
+
+  console.log('PASS synchronized main, Preferences, native, and menu themes')
+
   await setText('middle-click source')
   await evaluate(`editor.setSelection(new monaco.Selection(1, 1, 1, 7))`)
   await evaluate(`window.api.setPrimarySelection('paste')`)
@@ -285,6 +353,14 @@ async function run() {
   assert.equal(await evaluate(`editor.getModel().getLineContent(1)`), 'Hello world')
   await click('lowercase')
   assert.equal(await evaluate(`editor.getModel().getLineContent(1)`), 'hello world')
+
+  assert.equal(await evaluate(`document.getElementById('statusbar').style.display`), 'none')
+  assert.equal(
+    await evaluate(`document.getElementById('editor').classList.contains('hide-line-numbers')`),
+    true
+  )
+  await click('Status Bar')
+  await until(`document.getElementById('statusbar').style.display !== 'none'`, 'status bar enable')
   const status = await evaluate(`document.getElementById('statusbar').innerText`)
   assert.match(status, /Words\s*5/)
   assert.match(status, /Chars\s*25/)
@@ -1439,6 +1515,7 @@ async function run() {
   )
   assert.equal(preferences.showWhitespace, true)
   assert.equal(preferences.showLineNumbers, false)
+  assert.equal(preferences.statusBarVisible, true)
   assert.equal(preferences.typewriterScrolling, true)
   assert.equal(preferences.reopenLastDocument, true)
   assert.equal(preferences.backupOnSave, true)

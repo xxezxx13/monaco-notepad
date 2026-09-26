@@ -56,7 +56,7 @@ export const preferences = new Store<Preferences>({
     wordWrap: false,
     typewriterScrolling: false,
     zoomLevel: 0,
-    statusBarVisible: true,
+    statusBarVisible: false,
     showWhitespace: false,
     showLineNumbers: false,
     reopenLastDocument: false,
