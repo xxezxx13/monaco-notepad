@@ -96,3 +96,12 @@
     --success: #57c785;
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  :root[data-theme='light'],
+  :root[data-theme='dark'] {
+    --motion-fast: 0ms;
+    --motion-standard: 0ms;
+  }
+}
