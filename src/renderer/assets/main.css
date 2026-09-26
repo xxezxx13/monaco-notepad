@@ -825,6 +825,113 @@ body {
   outline-offset: 2px;
 }
 
+
+/* V3 working panel language */
+#line-filter,
+#regex-extract {
+  border-top-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+#line-filter-controls,
+#regex-extract-controls {
+  border-bottom-color: var(--border-subtle);
+  background: var(--surface-raised);
+}
+
+#line-filter-controls strong,
+#regex-extract-controls strong,
+#compare-actions strong {
+  color: var(--text-primary);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+#line-filter-summary,
+#regex-extract-summary {
+  background: var(--surface-status);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+#line-filter-summary {
+  border-bottom-color: var(--border-subtle);
+}
+
+#line-filter-summary.status-error,
+#regex-extract-summary.status-error {
+  color: var(--danger);
+}
+
+#line-filter-results {
+  background: var(--surface-editor);
+}
+
+.line-filter-result {
+  min-height: 27px;
+  padding: 5px 10px;
+  border-bottom-color: var(--border-subtle);
+  transition:
+    background-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.line-filter-result:hover {
+  background: var(--accent-soft);
+}
+
+.line-filter-result:focus-visible {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.line-filter-line-number {
+  color: var(--text-disabled);
+  font-weight: 500;
+}
+
+.line-filter-line-text {
+  color: var(--text-primary);
+}
+
+#compare-view {
+  background: var(--surface-window);
+}
+
+#compare-actions {
+  box-sizing: border-box;
+  min-height: 42px;
+  padding: 6px 10px;
+  border-bottom-color: var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font:
+    var(--ui-font-size) Inter,
+    'Noto Sans',
+    'Segoe UI',
+    sans-serif;
+}
+
+#compare-sides {
+  flex: 0 0 auto;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+#compare-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#diff-editor {
+  background: var(--surface-editor);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
