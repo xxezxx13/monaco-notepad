@@ -715,6 +715,116 @@ body {
   color: var(--text-primary);
 }
 
+/* V3 control interaction language */
+#line-filter-query,
+#regex-extract-pattern,
+#regex-extract-group {
+  min-height: var(--control-height);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+#line-filter-query:hover,
+#regex-extract-pattern:hover,
+#regex-extract-group:hover {
+  border-color: var(--border-strong);
+}
+
+#line-filter-query:focus-visible,
+#regex-extract-pattern:focus-visible,
+#regex-extract-group:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+#line-filter-controls button,
+#regex-extract-controls button,
+#compare-actions button,
+.modal-actions button {
+  min-height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+#line-filter-controls button:hover:not(:disabled),
+#regex-extract-controls button:hover:not(:disabled),
+#compare-actions button:hover:not(:disabled),
+.modal-actions button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+#line-filter-controls button:active:not(:disabled),
+#regex-extract-controls button:active:not(:disabled),
+#compare-actions button:active:not(:disabled),
+.modal-actions button:active:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+#line-filter-controls button:focus-visible,
+#regex-extract-controls button:focus-visible,
+#compare-actions button:focus-visible,
+.modal-actions button:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+#line-filter-controls button:disabled,
+#regex-extract-controls button:disabled,
+#compare-actions button:disabled,
+.modal-actions button:disabled,
+#open-progress-cancel:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+#line-filter-close,
+#regex-extract-close {
+  width: var(--control-height);
+  padding: 0;
+}
+
+.line-filter-option,
+.regex-extract-option {
+  cursor: pointer;
+}
+
+.line-filter-option input[type='checkbox'],
+.regex-extract-option input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.line-filter-option input[type='checkbox']:focus-visible,
+.regex-extract-option input[type='checkbox']:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
