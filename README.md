@@ -6,22 +6,20 @@ A minimal, single-document Linux desktop text editor built with Electron, Monaco
 
 ## Version
 
-**Monaco Notepad v2**
+**Monaco Notepad v3**
 
-v2 is the current release of Monaco Notepad.
+v3 is the current release of Monaco Notepad.
 
-## What's new in v2
+## What's new in v3
 
-- Safe Open protection for files that appear binary or otherwise unsafe for normal text editing
-- Reopen With Encoding for explicitly reinterpreting an already-open file
-- Exact mixed-line-ending detection with explicit LF/CRLF normalization
-- Filter Lines with matching/non-matching views and Follow File integration
-- Dual-layer Document Inspector for saved-source and current-editor facts
-- Regex Extract plus additional text transformation tools
-- Typewriter Scrolling for keeping the active cursor vertically centered
-- Optional `.bak` backup creation before overwriting an existing file
-- Responsive large-file opening with progress reporting and cancellation during file reading
-- Dependency, runtime-test, and Flatpak packaging hardening
+- Complete Graphite Utility visual refresh while preserving the focused Notepad-style workflow
+- Modernized editor shell, working panels, dialogs, progress surfaces, Document Inspector, and Preferences
+- Refined Graphite Dark and Clean Light themes with synchronized System-theme behavior
+- Unified semantic control, interaction, warning, error, Follow, read-only, and large-file state styling
+- Status bar and line-number gutter now hidden by default while remaining persistent and user-toggleable
+- Hardened semantic theme-token architecture with obsolete compatibility aliases removed
+- Improved narrow-window behavior for Filter Lines, Compare Against Disk, and Preferences
+- Added reduced-motion support and final responsive/accessibility polish
 
 ## Features
 
