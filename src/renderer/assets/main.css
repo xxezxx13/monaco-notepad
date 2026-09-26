@@ -1118,6 +1118,90 @@ body {
   gap: var(--space-3);
 }
 
+
+/* V3 state and feedback language */
+#read-only,
+#large-file,
+#follow-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  margin-left: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+#read-only,
+#large-file {
+  border-color: color-mix(
+    in srgb,
+    var(--warning) 36%,
+    var(--border-subtle)
+  );
+  background: color-mix(
+    in srgb,
+    var(--warning) 8%,
+    var(--surface-status)
+  );
+  color: var(--warning);
+}
+
+#follow-status {
+  border-color: color-mix(
+    in srgb,
+    var(--accent) 36%,
+    var(--border-subtle)
+  );
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+#transient-status {
+  display: flex;
+  align-items: center;
+  height: 18px;
+  box-sizing: border-box;
+  margin-left: var(--space-2);
+  padding: 0 7px;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  line-height: 16px;
+}
+
+#transient-status.status-error {
+  border-left-color: var(--danger);
+  background: color-mix(
+    in srgb,
+    var(--danger) 8%,
+    var(--surface-status)
+  );
+  color: var(--danger);
+  font-weight: 500;
+}
+
+#line-filter-summary.status-error,
+#regex-extract-summary.status-error {
+  background: color-mix(
+    in srgb,
+    var(--danger) 7%,
+    var(--surface-status)
+  );
+  box-shadow: inset 2px 0 0 var(--danger);
+  color: var(--danger);
+}
+
+#open-progress-cancel:disabled {
+  color: var(--text-disabled);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
