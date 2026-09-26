@@ -8,6 +8,9 @@
   --surface-control: #ffffff;
   --surface-status: #f3f5f7;
   --surface-overlay: rgba(18, 24, 31, 0.38);
+  --shadow-overlay:
+    0 18px 48px rgba(0, 0, 0, 0.22),
+    0 3px 12px rgba(0, 0, 0, 0.14);
 
   --border-subtle: #d7dde4;
   --border-strong: #aeb7c2;
@@ -40,17 +43,6 @@
   --motion-fast: 100ms;
   --motion-standard: 140ms;
 
-  /* Compatibility aliases allow gradual V3 surface migration. */
-  --bg-app: var(--surface-window);
-  --bg-editor: var(--surface-editor);
-  --bg-raised: var(--surface-raised);
-  --bg-control: var(--surface-control);
-  --status-bg: var(--surface-status);
-  --border: var(--border-subtle);
-
-  --bg: var(--surface-window);
-  --text: var(--text-primary);
-  --section-bg: var(--surface-raised);
 }
 
 :root[data-theme='dark'] {
