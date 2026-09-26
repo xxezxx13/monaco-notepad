@@ -9,20 +9,21 @@ body,
 
 body {
   padding: 0;
-  background: var(--bg-app);
+  background: var(--surface-window);
   color: var(--text-primary);
 }
 
 #app {
   display: flex;
   flex-direction: column;
-  background: var(--bg-app);
+  background: var(--surface-window);
 }
 
 #editor {
   flex: 1;
   min-height: 0;
-  background: var(--bg-editor);
+  background: var(--surface-editor);
+  box-shadow: inset 0 1px var(--border-subtle);
 }
 
 #line-filter {
@@ -349,17 +350,28 @@ body {
   font-size: 12px;
 }
 
+#large-file,
+#follow-status {
+  flex: 0 0 auto;
+  margin-left: var(--space-3);
+}
+
 #follow-status {
   color: var(--accent);
   font-weight: 600;
 }
 
 #transient-status {
+  flex: 1 1 160px;
+  min-width: 0;
+  margin-left: var(--space-3);
+  overflow: hidden;
   color: var(--text-secondary);
+  text-overflow: ellipsis;
 }
 
 #transient-status.status-error {
-  color: #c42b1c;
+  color: var(--danger);
 }
 #diff-editor {
   flex: 1;
@@ -370,21 +382,21 @@ body {
   flex: 0 0 auto;
   min-height: 28px;
   box-sizing: border-box;
-  padding: 0 6px;
-  border-top: 1px solid var(--border);
-  background: var(--status-bg);
+  padding: 0 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-status);
   color: var(--text-secondary);
   font:
-    12px Inter,
+    var(--status-font-size) Inter,
     'Noto Sans',
     'Segoe UI',
     sans-serif;
   white-space: nowrap;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0;
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.015);
+  overflow: hidden;
   user-select: none;
 }
 
@@ -400,8 +412,8 @@ body {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 12px;
-  border-left: 1px solid var(--border);
+  padding: 0 10px;
+  border-left: 1px solid var(--border-subtle);
   flex-shrink: 0;
   margin: 4px 0;
 }
@@ -416,16 +428,24 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+@media (max-width: 1000px) {
+  #statusbar:has(#large-file:not([hidden])) #word-count,
+  #statusbar:has(#large-file:not([hidden])) #character-count,
+  #statusbar:has(#large-file:not([hidden])) #selection-count,
+  #statusbar:has(#large-file:not([hidden])) #file-size {
+    display: none;
+  }
+}
+
 @media (max-width: 620px) {
-  #word-count,
-  #character-count,
-  #file-size {
+  #final-newline,
+  #statusbar:has(#large-file:not([hidden])) label:has(#language) {
     display: none;
   }
 }
 
 #read-only {
-  color: #ddb96a;
+  color: var(--warning);
 }
 
 .monaco-editor .bookmark-marker::before {
@@ -457,24 +477,13 @@ body {
 }
 
 .status-spacer {
-  flex: 1 1 0;
+  flex: 1 1 24px;
+  min-width: 8px;
 }
 
 .status-warning {
-  color: #c56c00;
+  color: var(--warning);
   font-weight: 600;
-}
-
-:root[data-theme='dark'] .status-warning {
-  color: #ffaa44;
-}
-
-:root[data-theme='light'] .monaco-editor .bookmark-marker::before {
-  background: #0066cc;
-}
-
-:root[data-theme='dark'] .monaco-editor .bookmark-marker::before {
-  background: #2588e8;
 }
 
 .modal {
@@ -651,6 +660,19 @@ body {
   .status-spacer {
     display: none;
   }
+}
+
+
+#statusbar #encoding {
+  width: 92px;
+}
+
+#statusbar #eol {
+  width: 64px;
+}
+
+#statusbar #language {
+  width: 104px;
 }
 
 #statusbar select {
