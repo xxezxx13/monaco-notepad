@@ -132,6 +132,25 @@
         </label>
       </div>
       <div
+        id="open-progress-dialog"
+        class="modal"
+        hidden
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="open-progress-title"
+      >
+        <div class="modal-overlay"></div>
+        <div class="modal-content open-progress-content">
+          <h2 id="open-progress-title">Opening Large File</h2>
+          <p id="open-progress-status" role="status" aria-live="polite">Reading file…</p>
+          <progress id="open-progress-bar" max="1" value="0"></progress>
+          <p id="open-progress-detail">0 B read</p>
+          <div class="modal-actions">
+            <button type="button" id="open-progress-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div
         id="shortcuts-dialog"
         class="modal"
         hidden

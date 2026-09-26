@@ -1,4 +1,13 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeTheme, clipboard } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  nativeTheme,
+  clipboard,
+  type IpcMainInvokeEvent
+} from 'electron'
 import { isAbsolute, join, resolve } from 'path'
 import { basename, dirname } from 'node:path'
 import { realpathSync, statSync, watch, type FSWatcher } from 'node:fs'
@@ -17,6 +26,7 @@ import {
   inspectFilePath,
   type BomlessFileEncoding,
   type FileEncoding,
+  type OpenFileReadOptions,
   type SaveFileRequest
 } from './files'
 import { createSaveBaselineTracker, fileSignature, type ConflictChoice } from './conflict'
@@ -50,6 +60,48 @@ let recoveryWrite: Promise<void> = Promise.resolve()
 let portalMonitor: ReturnType<typeof spawn> | null = null
 let followReader: FollowReader | null = null
 let followPoll: Promise<void> = Promise.resolve()
+const activeOpenRequests = new Map<number, Map<string, AbortController>>()
+
+function beginOpenRequest(
+  event: IpcMainInvokeEvent,
+  requestId: unknown
+): { options: OpenFileReadOptions; finish: () => void } {
+  if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 100) {
+    return { options: {}, finish: () => undefined }
+  }
+
+  const sender = event.sender
+  const senderId = sender.id
+  let senderRequests = activeOpenRequests.get(senderId)
+  if (!senderRequests) {
+    senderRequests = new Map()
+    activeOpenRequests.set(senderId, senderRequests)
+  }
+
+  senderRequests.get(requestId)?.abort()
+  const controller = new AbortController()
+  const abortOnDestroyed = (): void => controller.abort()
+  sender.once('destroyed', abortOnDestroyed)
+  senderRequests.set(requestId, controller)
+
+  return {
+    options: {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (!sender.isDestroyed()) {
+          sender.send('file:open-progress', { requestId, ...progress })
+        }
+      }
+    },
+    finish: () => {
+      if (!sender.isDestroyed()) sender.removeListener('destroyed', abortOnDestroyed)
+      const currentRequests = activeOpenRequests.get(senderId)
+      if (currentRequests?.get(requestId) !== controller) return
+      currentRequests.delete(requestId)
+      if (currentRequests.size === 0) activeOpenRequests.delete(senderId)
+    }
+  }
+}
 
 function sendPortalTheme(theme: PortalTheme): void {
   if (preferences.get('theme') === 'system' && mainWindow) {
@@ -661,48 +713,61 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('file:open', async (event, bomlessEncoding: BomlessFileEncoding = 'auto') => {
-    const window = BrowserWindow.fromWebContents(event.sender)
+  ipcMain.handle(
+    'file:open',
+    async (event, bomlessEncoding: BomlessFileEncoding = 'auto', requestId?: string) => {
+      const window = BrowserWindow.fromWebContents(event.sender)
 
-    if (!window) {
-      throw new Error('Unable to resolve application window')
-    }
-
-    try {
-      const result = await openFileDialog(window, bomlessEncoding)
-      if (result) {
-        saveBaseline.record(result.filePath)
-        recordRecentFile(
-          window,
-          result.filePath,
-          result.encoding === 'windows1252' ? 'windows1252' : 'auto'
-        )
+      if (!window) {
+        throw new Error('Unable to resolve application window')
       }
-      return result
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
 
-      await dialog.showMessageBox(window, {
-        type: 'error',
-        title: 'Open Error',
-        message: 'The file could not be opened.',
-        detail,
-        buttons: ['OK']
-      })
+      const openRequest = beginOpenRequest(event, requestId)
 
-      return null
+      try {
+        const result = await openFileDialog(window, bomlessEncoding, openRequest.options)
+        if (result) {
+          saveBaseline.record(result.filePath)
+          recordRecentFile(
+            window,
+            result.filePath,
+            result.encoding === 'windows1252' ? 'windows1252' : 'auto'
+          )
+        }
+        return result
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+
+        await dialog.showMessageBox(window, {
+          type: 'error',
+          title: 'Open Error',
+          message: 'The file could not be opened.',
+          detail,
+          buttons: ['OK']
+        })
+
+        return null
+      } finally {
+        openRequest.finish()
+      }
     }
-  })
+  )
 
   ipcMain.handle(
     'file:open-path',
-    async (event, filePath: string, bomlessEncoding: BomlessFileEncoding = 'auto') => {
+    async (
+      event,
+      filePath: string,
+      bomlessEncoding: BomlessFileEncoding = 'auto',
+      requestId?: string
+    ) => {
       const window = BrowserWindow.fromWebContents(event.sender)
 
       if (!window) throw new Error('Unable to resolve application window')
+      const openRequest = beginOpenRequest(event, requestId)
 
       try {
-        const result = await openFilePath(filePath, bomlessEncoding, window)
+        const result = await openFilePath(filePath, bomlessEncoding, window, openRequest.options)
         if (result) {
           saveBaseline.record(result.filePath)
           recordRecentFile(
@@ -722,16 +787,19 @@ app.whenReady().then(() => {
           buttons: ['OK']
         })
         return null
+      } finally {
+        openRequest.finish()
       }
     }
   )
 
   ipcMain.handle(
     'file:reopen-with-encoding',
-    async (event, filePath: string, encoding: FileEncoding) => {
+    async (event, filePath: string, encoding: FileEncoding, requestId?: string) => {
       const window = BrowserWindow.fromWebContents(event.sender)
 
       if (!window) throw new Error('Unable to resolve application window')
+      const openRequest = beginOpenRequest(event, requestId)
 
       try {
         if (!['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252'].includes(encoding)) {
@@ -743,7 +811,7 @@ app.whenReady().then(() => {
           throw new Error('The file could not be identified before reopening.')
         }
 
-        const result = await reopenFilePath(filePath, encoding, window)
+        const result = await reopenFilePath(filePath, encoding, window, openRequest.options)
         if (!result) return null
 
         const baselineSignature = fileSignature(result.filePath)
@@ -764,9 +832,19 @@ app.whenReady().then(() => {
         })
 
         return null
+      } finally {
+        openRequest.finish()
       }
     }
   )
+
+  ipcMain.handle('file:cancel-open', (event, requestId: string) => {
+    if (typeof requestId !== 'string') return false
+    const controller = activeOpenRequests.get(event.sender.id)?.get(requestId)
+    if (!controller) return false
+    controller.abort()
+    return true
+  })
 
   ipcMain.handle(
     'file:accept-reopen-baseline',
@@ -786,13 +864,16 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     'file:read-for-compare',
-    async (event, filePath: string, bomlessEncoding: BomlessFileEncoding) => {
+    async (event, filePath: string, bomlessEncoding: BomlessFileEncoding, requestId?: string) => {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) throw new Error('Unable to resolve application window')
+      const openRequest = beginOpenRequest(event, requestId)
       try {
-        return await openFilePath(filePath, bomlessEncoding, window)
+        return await openFilePath(filePath, bomlessEncoding, window, openRequest.options)
       } catch {
         return null
+      } finally {
+        openRequest.finish()
       }
     }
   )

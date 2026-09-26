@@ -1,6 +1,7 @@
 import { dialog, BrowserWindow, type MessageBoxOptions } from 'electron'
 import { constants, type Stats } from 'node:fs'
 import { access, lstat, open, readFile, realpath, stat } from 'node:fs/promises'
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import writeFileAtomic from 'write-file-atomic'
 import { basename, dirname, resolve } from 'node:path'
 import iconv from 'iconv-lite'
@@ -53,6 +54,7 @@ export interface FileInspection {
 export const DEFAULT_LARGE_FILE_WARNING_BYTES = 20 * 1024 * 1024
 export const SAFE_OPEN_PROBE_BYTES = 8 * 1024
 export const FILE_INSPECTION_CHUNK_BYTES = 64 * 1024
+export const FILE_OPEN_CHUNK_BYTES = 1024 * 1024
 
 export function largeFileWarningBytes(mebibytes: 10 | 20 | 50 | 100): number {
   return mebibytes * 1024 * 1024
@@ -68,6 +70,16 @@ export interface OpenFileResult {
   forcedReadOnly: boolean
   size: number
   largeFileMode: boolean
+}
+
+export interface OpenFileProgress {
+  bytesRead: number
+  totalBytes: number
+}
+
+export interface OpenFileReadOptions {
+  signal?: AbortSignal
+  onProgress?: (progress: OpenFileProgress) => void
 }
 
 interface SaveTarget {
@@ -186,15 +198,207 @@ export function isLikelyBinary(bytes: Uint8Array): boolean {
   return suspiciousControls / bytes.length >= 0.1
 }
 
-async function readOpenProbe(filePath: string): Promise<Uint8Array> {
-  const handle = await open(filePath, 'r')
+type StreamingDecodeMode =
+  | { kind: 'detected'; bomlessEncoding: BomlessFileEncoding }
+  | { kind: 'explicit'; encoding: FileEncoding }
 
-  try {
-    const buffer = Buffer.allocUnsafe(SAFE_OPEN_PROBE_BYTES)
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-    return buffer.subarray(0, bytesRead)
-  } finally {
-    await handle.close()
+interface StreamingDecodeResult {
+  text: string
+  encoding: FileEncoding
+  sourceEol: FileEolInfo
+}
+
+class StreamingEolAnalyzer {
+  private readonly counts: FileEolCounts = { crlf: 0, lf: 0, cr: 0 }
+  private pendingCr = false
+
+  append(text: string): void {
+    let index = 0
+
+    if (this.pendingCr) {
+      if (text.startsWith('\n')) {
+        this.counts.crlf++
+        index = 1
+      } else {
+        this.counts.cr++
+      }
+      this.pendingCr = false
+    }
+
+    for (; index < text.length; index++) {
+      const character = text[index]
+
+      if (character === '\r') {
+        if (index + 1 === text.length) {
+          this.pendingCr = true
+        } else if (text[index + 1] === '\n') {
+          this.counts.crlf++
+          index++
+        } else {
+          this.counts.cr++
+        }
+      } else if (character === '\n') {
+        this.counts.lf++
+      }
+    }
+  }
+
+  finish(): FileEolInfo {
+    if (this.pendingCr) {
+      this.counts.cr++
+      this.pendingCr = false
+    }
+
+    return eolInfoFromCounts(this.counts)
+  }
+}
+
+class StreamingFileDecoder {
+  private encoding: FileEncoding
+  private readonly bomBytes: number
+  private firstChunk = true
+  private utfDecoder: TextDecoder | null = null
+  private windowsDecoder: iconv.DecoderStream | null = null
+  private allowWindowsFallback = false
+  private rawChunks: Buffer[] | null = null
+  private textChunks: string[] = []
+  private eol = new StreamingEolAnalyzer()
+
+  constructor(probe: Uint8Array, mode: StreamingDecodeMode) {
+    const detected = this.detectEncoding(probe, mode)
+    this.encoding = detected.encoding
+    this.bomBytes = detected.bomBytes
+    this.allowWindowsFallback = detected.allowWindowsFallback
+
+    if (this.encoding === 'windows1252') {
+      this.windowsDecoder = iconv.getDecoder('windows-1252')
+    } else {
+      const label =
+        this.encoding === 'utf16le'
+          ? 'utf-16le'
+          : this.encoding === 'utf16be'
+            ? 'utf-16be'
+            : 'utf-8'
+      this.utfDecoder = new TextDecoder(label, { fatal: this.allowWindowsFallback })
+      if (this.allowWindowsFallback) this.rawChunks = []
+    }
+  }
+
+  private detectEncoding(
+    probe: Uint8Array,
+    mode: StreamingDecodeMode
+  ): { encoding: FileEncoding; bomBytes: number; allowWindowsFallback: boolean } {
+    if (mode.kind === 'explicit') {
+      const bomBytes =
+        (mode.encoding === 'utf8' || mode.encoding === 'utf8-bom') &&
+        probe.length >= 3 &&
+        probe[0] === 0xef &&
+        probe[1] === 0xbb &&
+        probe[2] === 0xbf
+          ? 3
+          : mode.encoding === 'utf16le' &&
+              probe.length >= 2 &&
+              probe[0] === 0xff &&
+              probe[1] === 0xfe
+            ? 2
+            : mode.encoding === 'utf16be' &&
+                probe.length >= 2 &&
+                probe[0] === 0xfe &&
+                probe[1] === 0xff
+              ? 2
+              : 0
+
+      return { encoding: mode.encoding, bomBytes, allowWindowsFallback: false }
+    }
+
+    if (probe.length >= 3 && probe[0] === 0xef && probe[1] === 0xbb && probe[2] === 0xbf) {
+      return { encoding: 'utf8-bom', bomBytes: 3, allowWindowsFallback: false }
+    }
+
+    if (probe.length >= 2 && probe[0] === 0xff && probe[1] === 0xfe) {
+      return { encoding: 'utf16le', bomBytes: 2, allowWindowsFallback: false }
+    }
+
+    if (probe.length >= 2 && probe[0] === 0xfe && probe[1] === 0xff) {
+      return { encoding: 'utf16be', bomBytes: 2, allowWindowsFallback: false }
+    }
+
+    if (mode.bomlessEncoding === 'auto') {
+      const utf16 = detectBomlessUtf16(probe)
+      if (utf16) return { encoding: utf16, bomBytes: 0, allowWindowsFallback: false }
+      return { encoding: 'utf8', bomBytes: 0, allowWindowsFallback: true }
+    }
+
+    return {
+      encoding: mode.bomlessEncoding,
+      bomBytes: 0,
+      allowWindowsFallback: false
+    }
+  }
+
+  private appendText(text: string): void {
+    if (text.length === 0) return
+    this.textChunks.push(text)
+    this.eol.append(text)
+  }
+
+  private switchToWindows1252(): void {
+    const rawChunks = this.rawChunks
+    if (!rawChunks) throw new Error('Windows-1252 fallback bytes are unavailable')
+
+    this.encoding = 'windows1252'
+    this.allowWindowsFallback = false
+    this.utfDecoder = null
+    this.windowsDecoder = iconv.getDecoder('windows-1252')
+    this.rawChunks = null
+    this.textChunks = []
+    this.eol = new StreamingEolAnalyzer()
+
+    for (const chunk of rawChunks) {
+      this.appendText(this.windowsDecoder.write(chunk))
+    }
+  }
+
+  append(bytes: Uint8Array): void {
+    const content = this.firstChunk && this.bomBytes > 0 ? bytes.subarray(this.bomBytes) : bytes
+    this.firstChunk = false
+
+    if (this.allowWindowsFallback) {
+      this.rawChunks!.push(Buffer.from(content))
+    }
+
+    if (this.windowsDecoder) {
+      this.appendText(this.windowsDecoder.write(Buffer.from(content)))
+      return
+    }
+
+    try {
+      this.appendText(this.utfDecoder!.decode(content, { stream: true }))
+    } catch {
+      if (!this.allowWindowsFallback) throw new Error('The file could not be decoded.')
+      this.switchToWindows1252()
+    }
+  }
+
+  finish(): StreamingDecodeResult {
+    if (this.windowsDecoder) {
+      this.appendText(this.windowsDecoder.end() ?? '')
+    } else {
+      try {
+        this.appendText(this.utfDecoder!.decode())
+      } catch {
+        if (!this.allowWindowsFallback) throw new Error('The file could not be decoded.')
+        this.switchToWindows1252()
+        this.appendText(this.windowsDecoder!.end() ?? '')
+      }
+    }
+
+    this.rawChunks = null
+    return {
+      text: this.textChunks.join(''),
+      encoding: this.encoding,
+      sourceEol: this.eol.finish()
+    }
   }
 }
 
@@ -573,7 +777,8 @@ function modelEolFromSource(sourceEol: FileEolInfo): FileEol {
 
 export async function openFileDialog(
   window: BrowserWindow,
-  bomlessEncoding: BomlessFileEncoding = 'auto'
+  bomlessEncoding: BomlessFileEncoding = 'auto',
+  options: OpenFileReadOptions = {}
 ): Promise<OpenFileResult | null> {
   const lastDirectory = preferences.get('lastDirectory')
 
@@ -589,20 +794,22 @@ export async function openFileDialog(
   const filePath = result.filePaths[0]
   preferences.set('lastDirectory', dirname(filePath))
 
-  return openFilePath(filePath, bomlessEncoding, window)
+  return openFilePath(filePath, bomlessEncoding, window, options)
 }
 
 async function readTextFilePath(
   filePath: string,
-  decoder: (bytes: Uint8Array) => { text: string; encoding: FileEncoding },
-  window?: BrowserWindow
+  decodeMode: StreamingDecodeMode,
+  window?: BrowserWindow,
+  options: OpenFileReadOptions = {}
 ): Promise<OpenFileResult | null> {
   const fileStats = await stat(filePath)
   if (!fileStats.isFile()) throw new Error('Only regular files can be opened.')
 
   const warningBytes = largeFileWarningBytes(preferences.get('largeFileWarningMiB'))
-  if (fileStats.size >= warningBytes) {
-    const options: MessageBoxOptions = {
+  const largeFileMode = fileStats.size >= warningBytes
+  if (largeFileMode) {
+    const dialogOptions: MessageBoxOptions = {
       type: 'warning',
       title: 'Large File',
       message: 'This file is large and may reduce editor performance.',
@@ -613,68 +820,109 @@ async function readTextFilePath(
       noLink: true
     }
     const result = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options)
+      ? await dialog.showMessageBox(window, dialogOptions)
+      : await dialog.showMessageBox(dialogOptions)
     if (result.response !== 0) return null
   }
 
-  const probe = await readOpenProbe(filePath)
-  let forcedReadOnly = false
+  if (options.signal?.aborted) return null
+  const reportProgress = largeFileMode ? options.onProgress : undefined
+  reportProgress?.({ bytesRead: 0, totalBytes: fileStats.size })
+  const handle = await open(filePath, 'r')
 
-  if (isLikelyBinary(probe)) {
-    const options: MessageBoxOptions = {
-      type: 'warning',
-      title: 'Likely Binary File',
-      message: 'This file appears to contain binary data.',
-      detail:
-        'Opening it as text may display unreadable characters. Monaco Notepad will lock the document to prevent accidental overwrite.',
-      buttons: ['Open Read-Only Anyway', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true
+  try {
+    if (options.signal?.aborted) return null
+
+    const probeBuffer = Buffer.allocUnsafe(Math.min(SAFE_OPEN_PROBE_BYTES, fileStats.size))
+    const probeRead =
+      probeBuffer.length === 0
+        ? { bytesRead: 0 }
+        : await handle.read(probeBuffer, 0, probeBuffer.length, 0)
+    const probe = probeBuffer.subarray(0, probeRead.bytesRead)
+    let forcedReadOnly = false
+
+    if (options.signal?.aborted) return null
+
+    if (isLikelyBinary(probe)) {
+      const dialogOptions: MessageBoxOptions = {
+        type: 'warning',
+        title: 'Likely Binary File',
+        message: 'This file appears to contain binary data.',
+        detail:
+          'Opening it as text may display unreadable characters. Monaco Notepad will lock the document to prevent accidental overwrite.',
+        buttons: ['Open Read-Only Anyway', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true
+      }
+
+      const result = window
+        ? await dialog.showMessageBox(window, dialogOptions)
+        : await dialog.showMessageBox(dialogOptions)
+
+      if (result.response !== 0 || options.signal?.aborted) return null
+      forcedReadOnly = true
     }
 
-    const result = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options)
+    const decoder = new StreamingFileDecoder(probe, decodeMode)
+    decoder.append(probe)
+    let bytesRead = probeRead.bytesRead
+    reportProgress?.({ bytesRead, totalBytes: fileStats.size })
 
-    if (result.response !== 0) return null
-    forcedReadOnly = true
-  }
+    while (bytesRead < fileStats.size) {
+      if (options.signal?.aborted) return null
 
-  const bytes = await readFile(filePath)
-  const decoded = decoder(bytes)
-  const sourceEol = analyzeEol(decoded.text)
-  const eol = modelEolFromSource(sourceEol)
-  preferences.set('lastDirectory', dirname(filePath))
+      const buffer = Buffer.allocUnsafe(Math.min(FILE_OPEN_CHUNK_BYTES, fileStats.size - bytesRead))
+      const result = await handle.read(buffer, 0, buffer.length, bytesRead)
+      if (result.bytesRead === 0) break
 
-  return {
-    filePath,
-    text: decoded.text,
-    encoding: decoded.encoding,
-    eol,
-    sourceEol,
-    readOnly: await getFileReadOnly(filePath),
-    forcedReadOnly,
-    size: fileStats.size,
-    largeFileMode: fileStats.size >= warningBytes
+      decoder.append(buffer.subarray(0, result.bytesRead))
+      bytesRead += result.bytesRead
+      reportProgress?.({ bytesRead, totalBytes: fileStats.size })
+
+      // Yield explicitly so cancellation IPC is serviced even when the file is
+      // already hot in the operating-system cache.
+      await yieldToEventLoop()
+    }
+
+    if (options.signal?.aborted) return null
+
+    const decoded = decoder.finish()
+    const eol = modelEolFromSource(decoded.sourceEol)
+    preferences.set('lastDirectory', dirname(filePath))
+
+    return {
+      filePath,
+      text: decoded.text,
+      encoding: decoded.encoding,
+      eol,
+      sourceEol: decoded.sourceEol,
+      readOnly: await getFileReadOnly(filePath),
+      forcedReadOnly,
+      size: fileStats.size,
+      largeFileMode
+    }
+  } finally {
+    await handle.close()
   }
 }
 
 export async function openFilePath(
   filePath: string,
   bomlessEncoding: BomlessFileEncoding = 'auto',
-  window?: BrowserWindow
+  window?: BrowserWindow,
+  options: OpenFileReadOptions = {}
 ): Promise<OpenFileResult | null> {
-  return readTextFilePath(filePath, (bytes) => decodeTextFile(bytes, bomlessEncoding), window)
+  return readTextFilePath(filePath, { kind: 'detected', bomlessEncoding }, window, options)
 }
 
 export async function reopenFilePath(
   filePath: string,
   encoding: FileEncoding,
-  window?: BrowserWindow
+  window?: BrowserWindow,
+  options: OpenFileReadOptions = {}
 ): Promise<OpenFileResult | null> {
-  return readTextFilePath(filePath, (bytes) => decodeTextFileWithEncoding(bytes, encoding), window)
+  return readTextFilePath(filePath, { kind: 'explicit', encoding }, window, options)
 }
 
 export function encodeTextFile(text: string, encoding: FileEncoding): Uint8Array {

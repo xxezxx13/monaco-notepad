@@ -47,6 +47,12 @@ type ReopenFileResult =
     })
   | null
 
+type OpenFileProgress = {
+  requestId: string
+  bytesRead: number
+  totalBytes: number
+}
+
 type EditorPreferences = {
   trimTrailingWhitespaceOnSave: boolean
   autoIndent: 'none' | 'full'
@@ -228,22 +234,41 @@ const api = {
 
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
-  openFile: (encoding: BomlessFileEncoding = 'auto'): Promise<OpenFileResult> =>
-    ipcRenderer.invoke('file:open', encoding),
+  openFile: (encoding: BomlessFileEncoding = 'auto', requestId?: string): Promise<OpenFileResult> =>
+    ipcRenderer.invoke('file:open', encoding, requestId),
 
   openFilePath: (
     filePath: string,
-    encoding: BomlessFileEncoding = 'auto'
-  ): Promise<OpenFileResult> => ipcRenderer.invoke('file:open-path', filePath, encoding),
+    encoding: BomlessFileEncoding = 'auto',
+    requestId?: string
+  ): Promise<OpenFileResult> => ipcRenderer.invoke('file:open-path', filePath, encoding, requestId),
 
-  reopenFilePath: (filePath: string, encoding: FileEncoding): Promise<ReopenFileResult> =>
-    ipcRenderer.invoke('file:reopen-with-encoding', filePath, encoding),
+  reopenFilePath: (
+    filePath: string,
+    encoding: FileEncoding,
+    requestId?: string
+  ): Promise<ReopenFileResult> =>
+    ipcRenderer.invoke('file:reopen-with-encoding', filePath, encoding, requestId),
+
+  cancelOpen: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke('file:cancel-open', requestId),
+
+  onOpenProgress: (callback: (progress: OpenFileProgress) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: OpenFileProgress): void =>
+      callback(progress)
+    ipcRenderer.on('file:open-progress', listener)
+    return () => ipcRenderer.removeListener('file:open-progress', listener)
+  },
 
   acceptReopenBaseline: (filePath: string, baselineSignature: string): Promise<void> =>
     ipcRenderer.invoke('file:accept-reopen-baseline', filePath, baselineSignature),
 
-  readDiskForCompare: (filePath: string, encoding: BomlessFileEncoding): Promise<OpenFileResult> =>
-    ipcRenderer.invoke('file:read-for-compare', filePath, encoding),
+  readDiskForCompare: (
+    filePath: string,
+    encoding: BomlessFileEncoding,
+    requestId?: string
+  ): Promise<OpenFileResult> =>
+    ipcRenderer.invoke('file:read-for-compare', filePath, encoding, requestId),
 
   saveFile: (request: SaveFileRequest): Promise<SaveFileResult> =>
     ipcRenderer.invoke('file:save', request),

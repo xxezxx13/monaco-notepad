@@ -1379,6 +1379,16 @@ async function run() {
     `editor.getModel().getValueLength() === 20 * 1024 * 1024`,
     'large file opened in full'
   )
+  assert.equal(await evaluate(`document.getElementById('open-progress-dialog').hidden`), true)
+  assert.equal(await evaluate(`document.getElementById('open-progress-bar').max`), 20 * 1024 * 1024)
+  assert.equal(
+    await evaluate(`document.getElementById('open-progress-bar').value`),
+    20 * 1024 * 1024
+  )
+  assert.match(
+    await evaluate(`document.getElementById('open-progress-detail').innerText`),
+    /final step cannot be cancelled/i
+  )
   await evaluate(`editor.setPosition({lineNumber: 1, column: 1})`)
   await click('Format JSON')
   assert.equal(await evaluate(`editor.getModel().getValueLength()`), 20 * 1024 * 1024)

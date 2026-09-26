@@ -389,6 +389,21 @@ const regexExtractCloseElement = document.getElementById(
 const regexExtractSummaryElement = document.getElementById(
   'regex-extract-summary'
 ) as HTMLDivElement | null
+const openProgressDialogElement = document.getElementById(
+  'open-progress-dialog'
+) as HTMLDivElement | null
+const openProgressStatusElement = document.getElementById(
+  'open-progress-status'
+) as HTMLParagraphElement | null
+const openProgressBarElement = document.getElementById(
+  'open-progress-bar'
+) as HTMLProgressElement | null
+const openProgressDetailElement = document.getElementById(
+  'open-progress-detail'
+) as HTMLParagraphElement | null
+const openProgressCancelElement = document.getElementById(
+  'open-progress-cancel'
+) as HTMLButtonElement | null
 const shortcutsDialog = document.getElementById('shortcuts-dialog') as HTMLDivElement | null
 const shortcutsList = document.getElementById('shortcuts-list') as HTMLUListElement | null
 const inspectorDialog = document.getElementById(
@@ -445,6 +460,16 @@ if (
 }
 
 if (
+  !openProgressDialogElement ||
+  !openProgressStatusElement ||
+  !openProgressBarElement ||
+  !openProgressDetailElement ||
+  !openProgressCancelElement
+) {
+  throw new Error('Open progress UI not found')
+}
+
+if (
   !inspectorDialog ||
   !inspectorDisk ||
   !inspectorEditor ||
@@ -462,6 +487,11 @@ const documentInspectorEditor = inspectorEditor
 const documentInspectorStatus = inspectorStatus
 const documentInspectorRefresh = inspectorRefresh
 const documentInspectorCopy = inspectorCopy
+const openProgressDialog = openProgressDialogElement
+const openProgressStatus = openProgressStatusElement
+const openProgressBar = openProgressBarElement
+const openProgressDetail = openProgressDetailElement
+const openProgressCancel = openProgressCancelElement
 
 const lineFilter = lineFilterElement
 const lineFilterQuery = lineFilterQueryElement
@@ -570,6 +600,9 @@ let lineFilterTimer: number | null = null
 let regexExtractTimer: number | null = null
 let lineFilterResult: LineFilterResult | null = null
 let lineFilterOptionsSignature: string | null = null
+let openRequestSequence = 0
+let activeOpenRequestId: string | null = null
+let cancelledOpenRequestId: string | null = null
 const lineFilterRenderLimit = 1000
 type InspectorDiskSnapshot = Awaited<ReturnType<typeof window.api.inspectFile>>
 let inspectorDiskSnapshot: InspectorDiskSnapshot | null = null
@@ -587,6 +620,72 @@ function showTransientStatus(message: string, error = false): void {
     transientStatusTimer = null
   }, 3500)
 }
+
+async function withOpenRequest<T>(
+  operation: (requestId: string, isCancelled: () => boolean) => Promise<T>
+): Promise<T> {
+  const requestId = `open-${++openRequestSequence}`
+  activeOpenRequestId = requestId
+  cancelledOpenRequestId = null
+
+  try {
+    return await operation(requestId, () => cancelledOpenRequestId === requestId)
+  } finally {
+    if (activeOpenRequestId === requestId) {
+      activeOpenRequestId = null
+      openProgressDialog.hidden = true
+      openProgressCancel.disabled = false
+    }
+    if (cancelledOpenRequestId === requestId) cancelledOpenRequestId = null
+  }
+}
+
+function showOpenReadProgress(bytesRead: number, totalBytes: number): void {
+  const wasHidden = openProgressDialog.hidden
+  const boundedTotal = Math.max(1, totalBytes)
+  const boundedRead = Math.min(Math.max(0, bytesRead), boundedTotal)
+  const percent = Math.floor((boundedRead / boundedTotal) * 100)
+
+  openProgressStatus.textContent = `Reading file… ${percent}%`
+  openProgressBar.max = boundedTotal
+  openProgressBar.value = boundedRead
+  openProgressDetail.textContent = `${formatFileSize(bytesRead)} of ${formatFileSize(totalBytes)}`
+  openProgressCancel.disabled = false
+  openProgressDialog.hidden = false
+
+  if (wasHidden) openProgressCancel.focus()
+}
+
+async function showOpenModelProgress(): Promise<void> {
+  openProgressStatus.textContent = 'Creating editor model…'
+  openProgressDetail.textContent = 'This final step cannot be cancelled.'
+  openProgressBar.value = openProgressBar.max
+  openProgressCancel.disabled = true
+  openProgressDialog.hidden = false
+
+  // Allow the model-creation phase to paint before Monaco synchronously
+  // replaces the full document buffer.
+  await new Promise<void>((resolvePaint) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolvePaint()))
+  })
+}
+
+openProgressCancel.addEventListener('click', () => {
+  const requestId = activeOpenRequestId
+  if (!requestId || openProgressCancel.disabled) return
+
+  cancelledOpenRequestId = requestId
+  openProgressStatus.textContent = 'Cancelling…'
+  openProgressDetail.textContent = 'The current document will remain unchanged.'
+  openProgressCancel.disabled = true
+  void window.api.cancelOpen(requestId)
+})
+
+window.api.onOpenProgress((progress) => {
+  if (progress.requestId !== activeOpenRequestId || progress.requestId === cancelledOpenRequestId)
+    return
+  showOpenReadProgress(progress.bytesRead, progress.totalBytes)
+})
 
 function currentLineFilterOptions(invert = lineFilterInvert.checked): LineFilterOptions {
   return {
@@ -1103,24 +1202,28 @@ function closeCompare(): void {
 
 async function openCompare(filePath: string, status = ''): Promise<void> {
   if (!compareView || !diffContainer || documentState.largeFileMode) return
-  const disk = await window.api.readDiskForCompare(
-    filePath,
-    documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto'
-  )
-  if (!disk || documentState.filePath !== filePath) return
-  diffEditor?.dispose()
-  diskCompareModel?.dispose()
-  diskCompareModel = monaco.editor.createModel(disk.text, model.getLanguageId())
-  diffEditor = monaco.editor.createDiffEditor(diffContainer, {
-    readOnly: true,
-    renderSideBySide: true,
-    automaticLayout: true,
-    originalEditable: false,
-    minimap: { enabled: false }
+  await withOpenRequest(async (requestId, isCancelled) => {
+    const disk = await window.api.readDiskForCompare(
+      filePath,
+      documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto',
+      requestId
+    )
+    if (!disk || isCancelled() || documentState.filePath !== filePath) return
+    if (disk.largeFileMode) await showOpenModelProgress()
+    diffEditor?.dispose()
+    diskCompareModel?.dispose()
+    diskCompareModel = monaco.editor.createModel(disk.text, model.getLanguageId())
+    diffEditor = monaco.editor.createDiffEditor(diffContainer, {
+      readOnly: true,
+      renderSideBySide: true,
+      automaticLayout: true,
+      originalEditable: false,
+      minimap: { enabled: false }
+    })
+    diffEditor.setModel({ original: model, modified: diskCompareModel })
+    compareView.hidden = false
+    if (compareStatus) compareStatus.textContent = status
   })
-  diffEditor.setModel({ original: model, modified: diskCompareModel })
-  compareView.hidden = false
-  if (compareStatus) compareStatus.textContent = status
 }
 
 compareClose?.addEventListener('click', closeCompare)
@@ -1485,15 +1588,21 @@ async function enterFollowMode(): Promise<void> {
         return
       }
     } else {
-      const result = await window.api.openFilePath(
-        filePath,
-        documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto'
-      )
-      if (!result) {
+      const reloadPath = filePath
+      const reloaded = await withOpenRequest(async (requestId, isCancelled) => {
+        const result = await window.api.openFilePath(
+          reloadPath,
+          documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto',
+          requestId
+        )
+        if (!result || isCancelled()) return false
+        await loadDocument(result, requestId)
+        return true
+      })
+      if (!reloaded) {
         syncFollowMenu()
         return
       }
-      loadDocument(result)
     }
   }
 
@@ -2154,7 +2263,14 @@ async function newDocument(): Promise<boolean> {
   return true
 }
 
-function loadDocument(result: NonNullable<Awaited<ReturnType<typeof window.api.openFile>>>): void {
+async function loadDocument(
+  result: NonNullable<Awaited<ReturnType<typeof window.api.openFile>>>,
+  requestId?: string
+): Promise<void> {
+  if (result.largeFileMode && requestId === activeOpenRequestId) {
+    await showOpenModelProgress()
+  }
+
   closeCompare()
   documentGeneration++
   bookmarks.clear()
@@ -2224,22 +2340,22 @@ async function openFile(
 
   const versionBeforeOpen = model.getAlternativeVersionId()
   const encodingBeforeOpen = documentState.encoding
-  const result = filePath
-    ? await window.api.openFilePath(filePath, bomlessEncoding)
-    : await window.api.openFile(bomlessEncoding)
+  await withOpenRequest(async (requestId, isCancelled) => {
+    const result = filePath
+      ? await window.api.openFilePath(filePath, bomlessEncoding, requestId)
+      : await window.api.openFile(bomlessEncoding, requestId)
 
-  if (!result) {
-    return
-  }
+    if (!result || isCancelled()) return
 
-  if (
-    (versionBeforeOpen !== model.getAlternativeVersionId() ||
-      encodingBeforeOpen !== documentState.encoding) &&
-    !(await confirmUnsavedChanges())
-  )
-    return
+    if (
+      (versionBeforeOpen !== model.getAlternativeVersionId() ||
+        encodingBeforeOpen !== documentState.encoding) &&
+      !(await confirmUnsavedChanges())
+    )
+      return
 
-  loadDocument(result)
+    if (!isCancelled()) await loadDocument(result, requestId)
+  })
 }
 
 async function reopenWithEncoding(encoding: typeof documentState.encoding): Promise<void> {
@@ -2258,33 +2374,35 @@ async function reopenWithEncoding(encoding: typeof documentState.encoding): Prom
   const versionBeforeReopen = model.getAlternativeVersionId()
   const encodingBeforeReopen = documentState.encoding
 
-  let result = await window.api.reopenFilePath(filePath, encoding)
-  if (!result) return
-
-  if (generation !== documentGeneration || documentState.filePath !== filePath) {
-    return
-  }
-
-  if (
-    versionBeforeReopen !== model.getAlternativeVersionId() ||
-    encodingBeforeReopen !== documentState.encoding
-  ) {
-    if (!(await confirmUnsavedChanges())) return
+  await withOpenRequest(async (requestId, isCancelled) => {
+    let result = await window.api.reopenFilePath(filePath, encoding, requestId)
+    if (!result || isCancelled()) return
 
     if (generation !== documentGeneration || documentState.filePath !== filePath) {
       return
     }
 
-    result = await window.api.reopenFilePath(filePath, encoding)
-    if (!result) return
+    if (
+      versionBeforeReopen !== model.getAlternativeVersionId() ||
+      encodingBeforeReopen !== documentState.encoding
+    ) {
+      if (!(await confirmUnsavedChanges())) return
 
-    if (generation !== documentGeneration || documentState.filePath !== filePath) {
-      return
+      if (generation !== documentGeneration || documentState.filePath !== filePath) {
+        return
+      }
+
+      result = await window.api.reopenFilePath(filePath, encoding, requestId)
+      if (!result || isCancelled()) return
+
+      if (generation !== documentGeneration || documentState.filePath !== filePath) {
+        return
+      }
     }
-  }
 
-  loadDocument(result)
-  await window.api.acceptReopenBaseline(result.filePath, result.baselineSignature)
+    await loadDocument(result, requestId)
+    await window.api.acceptReopenBaseline(result.filePath, result.baselineSignature)
+  })
 }
 
 async function saveDocument(saveAs = false, overwrite = false): Promise<boolean> {
@@ -2391,15 +2509,17 @@ async function reloadFromDisk(action: 'reload' | 'revert'): Promise<boolean> {
   if (!filePath) return false
   if (isDocumentDirty(model, documentState) && !(await window.api.confirmDiscard(action)))
     return false
-  const result = await window.api.openFilePath(
-    filePath,
-    documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto'
-  )
-  if (result) {
-    loadDocument(result)
+
+  return withOpenRequest(async (requestId, isCancelled) => {
+    const result = await window.api.openFilePath(
+      filePath,
+      documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto',
+      requestId
+    )
+    if (!result || isCancelled()) return false
+    await loadDocument(result, requestId)
     return true
-  }
-  return false
+  })
 }
 
 function addFinalNewline(): void {
@@ -2657,19 +2777,22 @@ window.api.onExternalFileChange((change) => {
       ) {
         const versionBeforeReload = model.getAlternativeVersionId()
         const encodingBeforeReload = documentState.encoding
-        const result = await window.api.openFilePath(
-          change.filePath,
-          documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto'
-        )
-        if (result) {
-          if (
-            (versionBeforeReload !== model.getAlternativeVersionId() ||
-              encodingBeforeReload !== documentState.encoding) &&
-            !(await confirmUnsavedChanges())
+        await withOpenRequest(async (requestId, isCancelled) => {
+          const result = await window.api.openFilePath(
+            change.filePath,
+            documentState.savedEncoding === 'windows1252' ? 'windows1252' : 'auto',
+            requestId
           )
-            return
-          loadDocument(result)
-        }
+          if (result && !isCancelled()) {
+            if (
+              (versionBeforeReload !== model.getAlternativeVersionId() ||
+                encodingBeforeReload !== documentState.encoding) &&
+              !(await confirmUnsavedChanges())
+            )
+              return
+            if (!isCancelled()) await loadDocument(result, requestId)
+          }
+        })
       }
     } finally {
       await window.api.externalFileChangeHandled()

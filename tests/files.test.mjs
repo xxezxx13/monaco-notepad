@@ -25,6 +25,8 @@ const sourcePath = fileURLToPath(new URL('../src/main/files.ts', import.meta.url
 const require = createRequire(sourcePath)
 const dialogCalls = []
 const fileReads = []
+const fileHandleReads = []
+let fileHandleCloses = 0
 let inspectionReadHook = null
 let dialogResponse = 1
 let saveDialogPath = null
@@ -60,16 +62,19 @@ vm.runInNewContext(compiled, {
         ...filesystem,
         async open(...args) {
           const handle = await filesystem.open(...args)
-
-          if (!inspectionReadHook) {
-            return handle
-          }
+          const openedPath = args[0]
 
           return new Proxy(handle, {
             get(target, property) {
               if (property === 'read') {
                 return async (...readArgs) => {
                   const result = await target.read(...readArgs)
+                  fileHandleReads.push({
+                    filePath: openedPath,
+                    bytesRead: result.bytesRead,
+                    length: readArgs[2],
+                    position: readArgs[3]
+                  })
 
                   if (inspectionReadHook && result.bytesRead > 0) {
                     const hook = inspectionReadHook
@@ -78,6 +83,13 @@ vm.runInNewContext(compiled, {
                   }
 
                   return result
+                }
+              }
+
+              if (property === 'close') {
+                return async () => {
+                  await target.close()
+                  fileHandleCloses++
                 }
               }
 
@@ -540,6 +552,7 @@ test('likely-binary files require explicit read-only acceptance', async (t) => {
   const parentWindow = {}
   dialogCalls.length = 0
   fileReads.length = 0
+  fileHandleReads.length = 0
   dialogResponse = 1
 
   assert.equal(await openFilePath(file, 'auto', parentWindow), null)
@@ -552,7 +565,8 @@ test('likely-binary files require explicit read-only acceptance', async (t) => {
   const opened = await openFilePath(file, 'auto', parentWindow)
 
   assert.equal(opened.forcedReadOnly, true)
-  assert.equal(fileReads.length, 1)
+  assert.equal(fileReads.length, 0)
+  assert.equal(fileHandleReads.filter((read) => read.filePath === file).length, 2)
 })
 
 test('Safe Open protected paths cannot be overwritten', async (t) => {
@@ -631,23 +645,36 @@ test('explicit reopen preserves Safe Open protection for likely binary files', a
 test('large-file Cancel reads no content; Open reads the complete file', async (t) => {
   const directory = await temporaryDirectory(t)
   const file = join(directory, 'large.txt')
-  const ending = '\r\nlast line café'
-  const text =
-    'x'.repeat(module.exports.DEFAULT_LARGE_FILE_WARNING_BYTES - Buffer.byteLength(ending)) + ending
-  await writeFile(file, text)
+  const bytes = Buffer.alloc(module.exports.DEFAULT_LARGE_FILE_WARNING_BYTES, 0x78)
+  const utf8Boundary =
+    module.exports.SAFE_OPEN_PROBE_BYTES + module.exports.FILE_OPEN_CHUNK_BYTES - 1
+  const crlfBoundary =
+    module.exports.SAFE_OPEN_PROBE_BYTES + module.exports.FILE_OPEN_CHUNK_BYTES * 2 - 1
+  Buffer.from('€').copy(bytes, utf8Boundary)
+  bytes[crlfBoundary] = 0x0d
+  bytes[crlfBoundary + 1] = 0x0a
+  Buffer.from('last line café').copy(bytes, bytes.length - Buffer.byteLength('last line café'))
+  const text = bytes.toString('utf8')
+  await writeFile(file, bytes)
   dialogCalls.length = 0
   fileReads.length = 0
+  fileHandleReads.length = 0
   dialogResponse = 1
   const parentWindow = {}
   assert.equal(await openFilePath(file, 'auto', parentWindow), null)
   assert.equal(fileReads.length, 0)
+  assert.equal(fileHandleReads.length, 0)
   assert.equal(dialogCalls.length, 1)
   assert.equal(dialogCalls[0][0], parentWindow)
   assert.deepEqual([...dialogCalls[0][1].buttons], ['Open', 'Cancel'])
   assert.equal(dialogCalls[0][1].cancelId, 1)
 
   dialogResponse = 0
-  const opened = await openFilePath(file, 'auto', parentWindow)
+  const progress = []
+  const closesBeforeOpen = fileHandleCloses
+  const opened = await openFilePath(file, 'auto', parentWindow, {
+    onProgress: (update) => progress.push(update)
+  })
   assert.equal(opened.text, text)
   assert.equal(opened.eol, 'CRLF')
   assert.equal(opened.sourceEol.kind, 'CRLF')
@@ -657,8 +684,46 @@ test('large-file Cancel reads no content; Open reads the complete file', async (
   assert.equal(opened.encoding, 'utf8')
   assert.equal(opened.readOnly, false)
   assert.equal(opened.forcedReadOnly, false)
-  assert.equal(opened.size, Buffer.byteLength(text))
-  assert.equal(fileReads.length, 1)
+  assert.equal(opened.size, bytes.length)
+  assert.equal(fileReads.length, 0)
+  assert.ok(fileHandleReads.length > 1)
+  assert.ok(fileHandleReads.every((read) => read.length <= module.exports.FILE_OPEN_CHUNK_BYTES))
+  assert.equal(fileHandleCloses, closesBeforeOpen + 1)
+  assert.equal(progress[0].bytesRead, 0)
+  assert.equal(progress[0].totalBytes, bytes.length)
+  assert.equal(progress.at(-1).bytesRead, bytes.length)
+  assert.equal(progress.at(-1).totalBytes, bytes.length)
+  assert.ok(
+    progress.every(
+      (update, index) => index === 0 || update.bytesRead >= progress[index - 1].bytesRead
+    )
+  )
+})
+
+test('large-file loading can be cancelled after probing and closes its handle', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'cancel-large.txt')
+  await writeFile(file, Buffer.alloc(module.exports.DEFAULT_LARGE_FILE_WARNING_BYTES, 0x78))
+  dialogResponse = 0
+  fileHandleReads.length = 0
+  const closesBeforeOpen = fileHandleCloses
+  const controller = new AbortController()
+
+  const opened = await openFilePath(
+    file,
+    'auto',
+    {},
+    {
+      signal: controller.signal,
+      onProgress: ({ bytesRead }) => {
+        if (bytesRead >= module.exports.SAFE_OPEN_PROBE_BYTES) controller.abort()
+      }
+    }
+  )
+
+  assert.equal(opened, null)
+  assert.equal(fileHandleReads.filter((read) => read.filePath === file).length, 1)
+  assert.equal(fileHandleCloses, closesBeforeOpen + 1)
 })
 
 test('small files open without warning; directories cannot be opened as files', async (t) => {
@@ -676,4 +741,37 @@ test('small files open without warning; directories cannot be opened as files', 
   assert.equal(opened.forcedReadOnly, false)
   assert.equal(dialogCalls.length, 0)
   await assert.rejects(openFilePath(dirname(file)), /regular files/)
+})
+
+test('automatic decoding can fall back to Windows-1252 after the probe', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'late-ansi.txt')
+  const bytes = Buffer.alloc(module.exports.SAFE_OPEN_PROBE_BYTES + 1, 0x78)
+  bytes[bytes.length - 1] = 0xe9
+  await writeFile(file, bytes)
+
+  const opened = await openFilePath(file)
+
+  assert.equal(opened.encoding, 'windows1252')
+  assert.equal(opened.text, `${'x'.repeat(bytes.length - 1)}é`)
+})
+
+test('streaming UTF-16 decoding preserves a surrogate pair split after the probe', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const file = join(directory, 'split-utf16le.txt')
+  const bytes = Buffer.alloc(module.exports.SAFE_OPEN_PROBE_BYTES + 2)
+
+  for (let offset = 0; offset < module.exports.SAFE_OPEN_PROBE_BYTES - 2; offset += 2) {
+    bytes[offset] = 0x61
+  }
+  bytes[module.exports.SAFE_OPEN_PROBE_BYTES - 2] = 0x3d
+  bytes[module.exports.SAFE_OPEN_PROBE_BYTES - 1] = 0xd8
+  bytes[module.exports.SAFE_OPEN_PROBE_BYTES] = 0x00
+  bytes[module.exports.SAFE_OPEN_PROBE_BYTES + 1] = 0xde
+  await writeFile(file, bytes)
+
+  const opened = await openFilePath(file)
+
+  assert.equal(opened.encoding, 'utf16le')
+  assert.equal(opened.text, `${'a'.repeat(module.exports.SAFE_OPEN_PROBE_BYTES / 2 - 1)}😀`)
 })
