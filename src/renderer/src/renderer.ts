@@ -45,6 +45,7 @@ import 'monaco-editor/languages/definitions/typescript/register'
 import 'monaco-editor/languages/definitions/vb/register'
 import 'monaco-editor/languages/definitions/xml/register'
 import 'monaco-editor/languages/definitions/yaml/register'
+import { isModifyingCommand, KEYBOARD_SHORTCUTS as keyboardShortcuts } from '../../shared/commands'
 import { createDocumentState, isDocumentDirty } from './document'
 import {
   countCharacters,
@@ -317,23 +318,6 @@ const encodingStatus = encodingElement
 const eolStatus = eolElement
 const languageStatus = languageElement
 
-const keyboardShortcuts = [
-  { label: 'New', accelerator: 'Ctrl+N' },
-  { label: 'Open', accelerator: 'Ctrl+O' },
-  { label: 'Save', accelerator: 'Ctrl+S' },
-  { label: 'Save As', accelerator: 'Ctrl+Shift+S' },
-  { label: 'Print', accelerator: 'Ctrl+P' },
-  { label: 'Filter Lines', accelerator: 'Ctrl+Shift+F' },
-  { label: 'Find', accelerator: 'Ctrl+F' },
-  { label: 'Replace', accelerator: 'Ctrl+H' },
-  { label: 'Go To', accelerator: 'Ctrl+G' },
-  { label: 'Toggle Bookmark', accelerator: 'Ctrl+Shift+F2' },
-  { label: 'Next Bookmark', accelerator: 'F2' },
-  { label: 'Previous Bookmark', accelerator: 'Shift+F2' },
-  { label: 'Toggle Line Numbers', accelerator: 'Ctrl+Shift+F9' },
-  { label: 'Full Screen', accelerator: 'F11' }
-]
-
 const languages = [
   { id: 'auto', label: 'Auto Detect' },
   { id: 'plaintext', label: 'Plain Text' },
@@ -574,6 +558,7 @@ if (!maybeModel) {
 
 const model = maybeModel
 const documentState = createDocumentState(model)
+let recoveredSession = false
 let recoveryTimer: number | null = null
 let statisticsTimer: number | null = null
 let documentGeneration = 0
@@ -587,7 +572,9 @@ let editorPreferences = {
 }
 let statusBarPreference = true
 let wordWrapPreference = false
+let showWhitespacePreference = false
 let typewriterScrollingPreference = false
+let restoringStoredPosition = false
 let primarySelectionPaste = false
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null
 let diskCompareModel: monaco.editor.ITextModel | null = null
@@ -663,10 +650,26 @@ async function showOpenModelProgress(): Promise<void> {
   openProgressCancel.disabled = true
   openProgressDialog.hidden = false
 
-  // Allow the model-creation phase to paint before Monaco synchronously
-  // replaces the full document buffer.
+  // Give the progress UI an opportunity to paint before Monaco synchronously
+  // replaces the full document buffer, but never let frame throttling stall
+  // the open operation indefinitely when the renderer is occluded/backgrounded.
   await new Promise<void>((resolvePaint) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolvePaint()))
+    let resolved = false
+
+    const fallback = window.setTimeout(() => {
+      if (resolved) return
+      resolved = true
+      resolvePaint()
+    }, 100)
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (resolved) return
+        resolved = true
+        window.clearTimeout(fallback)
+        resolvePaint()
+      })
+    })
   })
 }
 
@@ -1134,8 +1137,16 @@ model.onDidChangeContent(() => {
   queueRegexExtractRefresh()
 })
 
-function syncFollowMenu(): void {
-  void window.api.setFollowMenuState(followActive, followActive || documentState.filePath !== null)
+function syncMenuContext(): void {
+  const effectiveReadOnly =
+    documentState.readOnly || documentState.voluntaryReadOnly || documentState.forcedReadOnly
+
+  void window.api.setMenuContextState({
+    followActive,
+    followEnabled: followActive || documentState.filePath !== null,
+    readOnly: effectiveReadOnly,
+    readOnlyToggleEnabled: !followActive && !documentState.readOnly && !documentState.forcedReadOnly
+  })
 }
 
 // Native dialogs and asynchronous writes must finish before another document
@@ -1149,11 +1160,18 @@ function runDocumentAction(action: () => Promise<unknown>): void {
     })
 }
 
-function setShowWhitespace(enabled: boolean): void {
+function applyWhitespaceRendering(): void {
+  const enabled = showWhitespacePreference && !documentState.largeFileMode
+
   editor.updateOptions({
     renderWhitespace: enabled ? 'all' : 'none',
     renderControlCharacters: enabled
   })
+}
+
+function setShowWhitespace(enabled: boolean): void {
+  showWhitespacePreference = enabled
+  applyWhitespaceRendering()
 }
 
 function setShowLineNumbers(enabled: boolean): void {
@@ -1166,7 +1184,13 @@ function setShowLineNumbers(enabled: boolean): void {
 }
 
 function centerActiveCursorForTypewriter(): void {
-  if (!typewriterScrollingPreference || followActive) return
+  if (
+    !typewriterScrollingPreference ||
+    documentState.largeFileMode ||
+    followActive ||
+    restoringStoredPosition
+  )
+    return
 
   const position = editor.getPosition()
   if (!position) return
@@ -1181,6 +1205,7 @@ function setLargeFileMode(enabled: boolean): void {
     renderLineHighlight: enabled ? 'none' : 'line',
     quickSuggestions: enabled ? false : undefined
   })
+  applyWhitespaceRendering()
   if (enabled) {
     monaco.editor.setModelLanguage(model, 'plaintext')
   } else if (!documentState.languageOverride && documentState.filePath) {
@@ -1490,6 +1515,15 @@ function updateSelectionCount(): void {
 function updateStatistics(): void {
   if (statisticsTimer !== null) window.clearTimeout(statisticsTimer)
   statisticsTimer = null
+
+  if (documentState.largeFileMode) {
+    wordCountStatus.textContent = 'Words —'
+    characterCountStatus.textContent = 'Chars —'
+    selectionCountStatus.hidden = true
+    selectionCountStatus.textContent = ''
+    return
+  }
+
   const text = model.getValue()
   wordCountStatus.textContent = `Words ${countWords(text).toLocaleString()}`
   characterCountStatus.textContent = `Chars ${countCharacters(text).toLocaleString()}`
@@ -1537,6 +1571,7 @@ function applyReadOnlyState(): void {
       documentState.readOnly || documentState.voluntaryReadOnly || documentState.forcedReadOnly
   })
   updateStatusBar()
+  syncMenuContext()
 }
 
 function updateFollowStatus(state: 'active' | 'paused' | 'waiting'): void {
@@ -1561,7 +1596,7 @@ async function leaveFollowMode(): Promise<void> {
   documentState.voluntaryReadOnly = voluntaryReadOnlyBeforeFollow
   followStatus.hidden = true
   await refreshReadOnly()
-  syncFollowMenu()
+  syncMenuContext()
 }
 
 async function enterFollowMode(): Promise<void> {
@@ -1574,17 +1609,17 @@ async function enterFollowMode(): Promise<void> {
   if (isDocumentDirty(model, documentState)) {
     const choice = await window.api.confirmUnsavedChanges()
     if (choice === 'cancel') {
-      syncFollowMenu()
+      syncMenuContext()
       return
     }
     if (choice === 'save') {
       if (!(await saveDocument())) {
-        syncFollowMenu()
+        syncMenuContext()
         return
       }
       filePath = documentState.filePath
       if (!filePath) {
-        syncFollowMenu()
+        syncMenuContext()
         return
       }
     } else {
@@ -1600,7 +1635,7 @@ async function enterFollowMode(): Promise<void> {
         return true
       })
       if (!reloaded) {
-        syncFollowMenu()
+        syncMenuContext()
         return
       }
     }
@@ -1623,11 +1658,11 @@ async function enterFollowMode(): Promise<void> {
     documentState.fileSize = result.size
     applyReadOnlyState()
     updateFollowStatus('active')
-    syncFollowMenu()
+    syncMenuContext()
     requestAnimationFrame(revealFollowEnd)
   } catch (error) {
     showTransientStatus(conciseTransformError('Follow File unavailable', error), true)
-    syncFollowMenu()
+    syncMenuContext()
   }
 }
 
@@ -1728,6 +1763,7 @@ function inspectorRowsForEditor(): Array<[string, string]> {
   return [
     ['Document', documentState.filePath ?? 'Untitled'],
     ['Dirty', isDocumentDirty(model, documentState) ? 'Yes' : 'No'],
+    ['Recovery', recoveredSession ? 'Recovered session' : 'None'],
     ['Current encoding', inspectorEncodingLabel(documentState.encoding)],
     ['Saved encoding', inspectorEncodingLabel(documentState.savedEncoding)],
     ['Monaco model EOL', model.getEOL() === '\r\n' ? 'CRLF' : 'LF'],
@@ -1766,11 +1802,6 @@ function renderInspectorEditor(): void {
 
 function renderInspectorDisk(): void {
   renderInspectorRows(documentInspectorDisk, inspectorRowsForDisk())
-}
-
-function closeDocumentInspector(): void {
-  documentInspectorDialog.hidden = true
-  editor.focus()
 }
 
 async function refreshInspectorDisk(): Promise<void> {
@@ -1839,17 +1870,16 @@ async function copyDocumentInspectorReport(): Promise<void> {
 
 function openDocumentInspector(): void {
   if (compareView && !compareView.hidden) closeCompare()
-  if (shortcutsDialog && !shortcutsDialog.hidden) shortcutsDialog.hidden = true
+  shortcutsModalController?.close(false)
 
   inspectorDiskSnapshot = null
   inspectorDiskError = null
-  documentInspectorDialog.hidden = false
+  documentInspectorModalController.open()
   renderInspectorEditor()
   renderInspectorDisk()
   documentInspectorStatus.textContent = documentState.filePath
     ? 'Disk snapshot has not been read yet.'
     : 'This document has not been saved to disk.'
-  documentInspectorRefresh.focus()
 
   void refreshInspectorDisk()
 }
@@ -1862,34 +1892,104 @@ documentInspectorCopy.addEventListener('click', () => {
   void copyDocumentInspectorReport()
 })
 
-documentInspectorDialog.addEventListener('click', (event) => {
-  const target = event.target
-  if (target instanceof HTMLElement && target.hasAttribute('data-inspector-close')) {
-    closeDocumentInspector()
-  }
-})
+interface ModalController {
+  open(): void
+  close(restoreEditorFocus?: boolean): void
+  toggle(): void
+}
 
-documentInspectorDialog.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closeDocumentInspector()
+function createModalController(
+  dialog: HTMLDivElement,
+  initialFocus: () => HTMLElement | null
+): ModalController {
+  const close = (restoreEditorFocus = true): void => {
+    if (dialog.hidden) return
+
+    dialog.hidden = true
+    if (restoreEditorFocus) editor.focus()
   }
-})
+
+  const open = (): void => {
+    dialog.hidden = false
+    initialFocus()?.focus()
+  }
+
+  dialog.addEventListener('click', (event) => {
+    const target = event.target
+
+    if (target instanceof HTMLElement && target.closest('[data-close-modal]')) {
+      close()
+    }
+  })
+
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+
+    event.preventDefault()
+    close()
+  })
+
+  return {
+    open,
+    close,
+    toggle(): void {
+      if (dialog.hidden) {
+        open()
+      } else {
+        close()
+      }
+    }
+  }
+}
+
+const documentInspectorModalController = createModalController(
+  documentInspectorDialog,
+  () => documentInspectorRefresh
+)
+
+const shortcutsModalController = shortcutsDialog
+  ? createModalController(shortcutsDialog, () =>
+      shortcutsDialog.querySelector<HTMLButtonElement>('button[data-close-modal]')
+    )
+  : null
 
 function toggleShortcutsDialog(): void {
-  if (!shortcutsDialog) return
-  const visible = shortcutsDialog.hidden
-  shortcutsDialog.hidden = !visible
-  if (!visible) {
-    shortcutsDialog.querySelector('button')?.focus()
-  } else {
-    editor.focus()
+  if (!shortcutsModalController || !shortcutsDialog) return
+
+  if (!shortcutsDialog.hidden) {
+    shortcutsModalController.close()
+    return
+  }
+
+  documentInspectorModalController.close(false)
+  shortcutsModalController.open()
+}
+
+async function copyDocumentPath(filenameOnly: boolean): Promise<void> {
+  const filePath = documentState.filePath
+
+  if (!filePath) {
+    showTransientStatus(
+      filenameOnly
+        ? 'Save the document before copying its filename'
+        : 'Save the document before copying its path',
+      true
+    )
+    return
+  }
+
+  try {
+    await window.api.copyPath(filePath, filenameOnly)
+    showTransientStatus(filenameOnly ? 'Filename copied' : 'Path copied')
+  } catch (error) {
+    showTransientStatus(conciseTransformError('Copy failed', error), true)
   }
 }
 
 function setVoluntaryReadOnly(enabled: boolean): void {
   documentState.voluntaryReadOnly = enabled
   applyReadOnlyState()
+  showTransientStatus(enabled ? 'Read-only enabled' : 'Read-only disabled')
 }
 
 function languageForPath(filePath: string): string {
@@ -2005,7 +2105,8 @@ function getDocumentName(): string {
 
 function updateTitle(): void {
   const dirty = isDocumentDirty(model, documentState)
-  document.title = `${dirty ? '*' : ''}${getDocumentName()} - Monaco Notepad`
+  const recovered = recoveredSession ? ' [Recovered]' : ''
+  document.title = `${dirty ? '*' : ''}${getDocumentName()}${recovered} - Monaco Notepad`
 }
 
 const eolNormalizationHistory = new Map<number, typeof documentState.eol | null>()
@@ -2227,6 +2328,7 @@ async function newDocument(): Promise<boolean> {
 
   documentGeneration++
   bookmarks.clear()
+  recoveredSession = false
   model.setValue('')
   model.setEOL(
     defaultNewDocumentEol === 'CRLF'
@@ -2258,7 +2360,7 @@ async function newDocument(): Promise<boolean> {
   updateTitle()
   updateStatusBar()
   updateStatistics()
-  syncFollowMenu()
+  syncMenuContext()
   editor.focus()
   return true
 }
@@ -2273,7 +2375,17 @@ async function loadDocument(
 
   closeCompare()
   documentGeneration++
+  const loadGeneration = documentGeneration
   bookmarks.clear()
+  recoveredSession = false
+
+  // Put Monaco into its reduced-cost rendering posture before replacing a
+  // large document so user preferences such as visible whitespace and
+  // Typewriter Scrolling cannot make model creation unnecessarily expensive.
+  if (result.largeFileMode && !documentState.largeFileMode) {
+    setLargeFileMode(true)
+  }
+
   model.setValue(result.text)
   model.setEOL(
     result.eol === 'CRLF'
@@ -2302,23 +2414,34 @@ async function loadDocument(
   updateTitle()
   updateStatusBar()
   updateStatistics()
-  syncFollowMenu()
+  syncMenuContext()
 
-  void window.api.getFilePosition(result.filePath).then((stored) => {
-    if (!stored) return
-    requestAnimationFrame(() => {
-      const line = Math.min(stored.line, model.getLineCount())
-      const column = Math.min(stored.column, model.getLineMaxColumn(line))
+  const storedPosition = await window.api.getFilePosition(result.filePath)
+
+  if (
+    storedPosition &&
+    loadGeneration === documentGeneration &&
+    documentState.filePath === result.filePath
+  ) {
+    restoringStoredPosition = true
+
+    try {
+      const line = Math.min(storedPosition.line, model.getLineCount())
+      const column = Math.min(storedPosition.column, model.getLineMaxColumn(line))
       editor.setPosition({ lineNumber: line, column })
       editor.revealLineInCenterIfOutsideViewport(line)
-      editor.setScrollTop(Math.min(stored.scrollTop, editor.getScrollHeight()))
-      if (stored.languageOverride) {
-        documentState.languageOverride = stored.languageOverride
-        monaco.editor.setModelLanguage(model, stored.languageOverride)
+      editor.setScrollTop(Math.min(storedPosition.scrollTop, editor.getScrollHeight()))
+
+      if (storedPosition.languageOverride) {
+        documentState.languageOverride = storedPosition.languageOverride
+        monaco.editor.setModelLanguage(model, storedPosition.languageOverride)
       }
+
       updateStatusBar()
-    })
-  })
+    } finally {
+      restoringStoredPosition = false
+    }
+  }
 
   editor.focus()
 }
@@ -2475,11 +2598,17 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
   if (!documentState.languageOverride) {
     monaco.editor.setModelLanguage(model, languageForPath(filePath))
   }
-  scheduleRecovery()
+  if (isDocumentDirty(model, documentState)) {
+    scheduleRecovery()
+  } else {
+    recoveredSession = false
+    await clearRecovery()
+  }
+
   await refreshReadOnly()
   updateTitle()
   updateStatusBar()
-  syncFollowMenu()
+  syncMenuContext()
   editor.focus()
 
   return true
@@ -2518,6 +2647,7 @@ async function reloadFromDisk(action: 'reload' | 'revert'): Promise<boolean> {
     )
     if (!result || isCancelled()) return false
     await loadDocument(result, requestId)
+    showTransientStatus(action === 'reload' ? 'Reloaded from disk' : 'Reverted to saved file')
     return true
   })
 }
@@ -2602,6 +2732,7 @@ function setEncoding(encoding: typeof documentState.encoding): void {
   updateTitle()
   updateStatusBar()
   scheduleRecovery()
+  showTransientStatus(`Encoding changed to ${inspectorEncodingLabel(encoding)}`)
   editor.focus()
 }
 
@@ -2851,43 +2982,8 @@ window.api.onFullScreen((enabled) => {
   editor.layout()
 })
 
-const modifyingCommands: string[] = [
-  'delete',
-  'duplicate-line',
-  'move-line-up',
-  'move-line-down',
-  'indent',
-  'outdent',
-  'tabs-to-spaces',
-  'spaces-to-tabs',
-  'sort-lines-asc',
-  'sort-lines-desc',
-  'sort-lines-natural-asc',
-  'sort-lines-natural-desc',
-  'sort-lines-numeric-asc',
-  'sort-lines-numeric-desc',
-  'reverse-lines',
-  'join-lines',
-  'split-lines-commas',
-  'remove-duplicate-lines',
-  'delete-empty-lines',
-  'trim-trailing-whitespace',
-  'toggle-line-comment',
-  'add-final-newline',
-  'remove-final-newline',
-  'case-upper',
-  'case-lower',
-  'case-title',
-  'time-date',
-  'bookmark-toggle',
-  'bookmark-clear'
-]
-
 window.api.onMenuCommand((command) => {
-  if (
-    (modifyingCommands.includes(command) || command.startsWith('transform:')) &&
-    editor.getOption(monaco.editor.EditorOption.readOnly)
-  ) {
+  if (isModifyingCommand(command) && editor.getOption(monaco.editor.EditorOption.readOnly)) {
     showTransientStatus('Command unavailable in read-only mode', true)
     return
   }
@@ -2941,10 +3037,10 @@ window.api.onMenuCommand((command) => {
       runDocumentAction(() => reloadFromDisk(command))
       break
     case 'copy-full-path':
-      if (documentState.filePath) void window.api.copyPath(documentState.filePath)
+      void copyDocumentPath(false)
       break
     case 'copy-filename':
-      if (documentState.filePath) void window.api.copyPath(documentState.filePath, true)
+      void copyDocumentPath(true)
       break
     case 'reveal-file':
       if (documentState.filePath) void window.api.revealFile(documentState.filePath)
@@ -3136,6 +3232,9 @@ window.api.onMenuCommand((command) => {
     case 'find-next':
       editor.trigger('menu', 'editor.action.nextMatchFindAction', null)
       break
+    case 'find-previous':
+      editor.trigger('menu', 'editor.action.previousMatchFindAction', null)
+      break
     case 'replace':
       editor.trigger('menu', 'editor.action.startFindReplaceAction', null)
       break
@@ -3211,19 +3310,6 @@ window.addEventListener('keydown', (event) => {
     const enabled = editorContainer.classList.contains('hide-line-numbers')
     setShowLineNumbers(enabled)
     void window.api.preferences.set('showLineNumbers', enabled)
-  } else if (
-    event.key === '+' ||
-    (event.code === 'Equal' && event.shiftKey) ||
-    event.code === 'NumpadAdd'
-  ) {
-    event.preventDefault()
-    editor.trigger('keyboard', 'editor.action.fontZoomIn', null)
-  } else if (event.key === '-' || event.code === 'Minus' || event.code === 'NumpadSubtract') {
-    event.preventDefault()
-    editor.trigger('keyboard', 'editor.action.fontZoomOut', null)
-  } else if (event.key === '0' || event.code === 'Digit0' || event.code === 'Numpad0') {
-    event.preventDefault()
-    editor.trigger('keyboard', 'editor.action.fontZoomReset', null)
   }
 })
 
@@ -3335,7 +3421,7 @@ window.api.onPreferencesChanged((changes) => {
       largeFileWarningMiB: changes.largeFileWarningMiB ?? editorPreferences.largeFileWarningMiB
     })
   }
-  syncFollowMenu()
+  syncMenuContext()
 })
 
 monaco.editor.EditorZoom.onDidChangeZoomLevel((zoomLevel) => {
@@ -3348,6 +3434,7 @@ runDocumentAction(async () => {
   if (recovery) {
     documentGeneration++
     bookmarks.clear()
+    recoveredSession = true
     model.setValue(recovery.text)
     model.setEOL(
       recovery.eol === 'CRLF'
@@ -3390,6 +3477,6 @@ runDocumentAction(async () => {
   }
 
   await window.api.rendererReady(Boolean(recovery))
-  syncFollowMenu()
+  syncMenuContext()
   editor.focus()
 })

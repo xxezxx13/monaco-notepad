@@ -106,7 +106,6 @@
           >Large File</span
         >
         <span id="follow-status" class="status-item" hidden>Following</span>
-        <span id="transient-status" role="status" aria-live="polite" hidden></span>
         <span class="status-spacer"></span>
         <label>
           <span class="sr-only">Encoding</span>
@@ -132,6 +131,7 @@
           <select id="language" title="Change language"></select>
         </label>
       </div>
+      <span id="transient-status" role="status" aria-live="polite" hidden></span>
       <div
         id="open-progress-dialog"
         class="modal"
@@ -176,7 +176,7 @@
         aria-modal="true"
         aria-labelledby="document-inspector-title"
       >
-        <div class="modal-overlay" data-inspector-close></div>
+        <div class="modal-overlay" data-close-modal></div>
         <div class="modal-content inspector-modal-content">
           <h2 id="document-inspector-title">Document Inspector</h2>
           <p class="inspector-intro">
@@ -202,7 +202,7 @@
           <div class="modal-actions">
             <button type="button" id="document-inspector-refresh">Refresh Disk</button>
             <button type="button" id="document-inspector-copy">Copy Report</button>
-            <button type="button" id="document-inspector-close" data-inspector-close>Close</button>
+            <button type="button" id="document-inspector-close" data-close-modal>Close</button>
           </div>
         </div>
       </div>

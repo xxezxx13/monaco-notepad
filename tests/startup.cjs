@@ -24,7 +24,9 @@ async function until(window, code, description) {
 
 async function run() {
   assert.ok(
-    ['explicit', 'recovery', 'scratchpad', 'last', 'missing'].includes(mode),
+    ['explicit', 'recovery', 'scratchpad', 'last', 'missing', 'invalid', 'save-cleanup'].includes(
+      mode
+    ),
     `Unknown mode: ${mode}`
   )
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'monaco-notepad-startup-'))
@@ -67,6 +69,27 @@ async function run() {
         ...(mode === 'scratchpad'
           ? { position: { line: 1, column: 4, scrollTop: 0, languageOverride: 'markdown' } }
           : {})
+      })
+    )
+  }
+
+  if (mode === 'invalid') {
+    await fs.writeFile(path.join(profile, 'recovery.json'), '{"invalid":')
+  }
+
+  if (mode === 'save-cleanup') {
+    await fs.writeFile(
+      path.join(profile, 'recovery.json'),
+      JSON.stringify({
+        filePath: lastPath,
+        text: 'recovered save document',
+        encoding: 'utf8',
+        eol: 'LF',
+        sourceEol: {
+          kind: 'LF',
+          counts: { crlf: 0, lf: 0, cr: 0 }
+        },
+        eolNormalizationTarget: null
       })
     )
   }
@@ -117,9 +140,11 @@ async function run() {
         ? 'recovered document'
         : mode === 'scratchpad'
           ? 'persistent scratchpad'
-          : mode === 'last'
-            ? 'last document'
-            : ''
+          : mode === 'save-cleanup'
+            ? 'recovered save document'
+            : mode === 'last' || mode === 'invalid'
+              ? 'last document'
+              : ''
   await until(
     window,
     `window.editor?.getValue() === ${JSON.stringify(expected)}`,
@@ -128,6 +153,13 @@ async function run() {
   if (mode === 'recovery') {
     assert.equal(await evaluate(window, `document.getElementById('eol').value`), 'Mixed')
   }
+
+  const recoveredTitle = await evaluate(window, `document.title.includes('[Recovered]')`)
+  assert.equal(
+    recoveredTitle,
+    mode === 'recovery' || mode === 'scratchpad' || mode === 'save-cleanup',
+    `${mode} recovered-state title`
+  )
 
   if (mode === 'explicit') {
     assert.equal(
@@ -139,6 +171,24 @@ async function run() {
     const preferences = JSON.parse(await fs.readFile(path.join(profile, 'config.json'), 'utf8'))
     assert.equal(preferences.lastDocumentPath, null)
   }
+
+  if (mode === 'invalid') {
+    assert.equal(
+      messages.some((message) => message.title === 'Recovery Error'),
+      true,
+      'invalid recovery must report a recovery error'
+    )
+    assert.equal(
+      messages.some((message) => message.title === 'Recover Document'),
+      false,
+      'invalid recovery must not offer invalid data'
+    )
+    await assert.rejects(
+      fs.readFile(path.join(profile, 'recovery.json'), 'utf8'),
+      (error) => error?.code === 'ENOENT'
+    )
+  }
+
   if (mode === 'last') {
     const whitespace = await evaluate(
       window,
@@ -151,6 +201,44 @@ async function run() {
     assert.equal(await evaluate(window, `window.editor.getPosition().column`), 4)
     assert.equal(await evaluate(window, `window.editor.getModel().getLanguageId()`), 'markdown')
   }
+
+  if (mode === 'save-cleanup') {
+    window.webContents.send('menu:command', 'save')
+
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try {
+        if ((await fs.readFile(lastPath, 'utf8')) === 'recovered save document') break
+      } catch {
+        // Keep waiting for the normal Save command to finish.
+      }
+      await delay(50)
+    }
+
+    assert.equal(
+      await fs.readFile(lastPath, 'utf8'),
+      'recovered save document',
+      'recovered Save must update the original file'
+    )
+
+    await until(
+      window,
+      `!document.title.includes('[Recovered]')`,
+      'recovered marker cleared after save'
+    )
+
+    assert.equal(
+      await evaluate(window, `document.title.includes('[Recovered]')`),
+      false,
+      'successful Save must clear recovered title state'
+    )
+
+    await assert.rejects(
+      fs.readFile(path.join(profile, 'recovery.json'), 'utf8'),
+      (error) => error?.code === 'ENOENT',
+      'successful Save must remove recovery.json'
+    )
+  }
+
   console.log(`PASS startup priority: ${mode}`)
 }
 

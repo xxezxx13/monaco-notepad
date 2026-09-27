@@ -3,9 +3,12 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeTheme, shell } = require('electron')
 const assert = require('node:assert/strict')
+const nodeFs = require('node:fs')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const os = require('node:os')
+const vm = require('node:vm')
+const ts = require('typescript')
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const messages = []
@@ -29,8 +32,9 @@ async function evaluate(code) {
   return window.webContents.executeJavaScript(code, true)
 }
 
-async function until(code, description) {
-  for (let attempt = 0; attempt < 120; attempt++) {
+async function until(code, description, timeoutMs = 6000) {
+  const attempts = Math.ceil(timeoutMs / 50)
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (await evaluate(code)) return
     await delay(50)
   }
@@ -56,6 +60,31 @@ function menuItem(label, menu = Menu.getApplicationMenu()) {
     if (nested) return nested
   }
 }
+
+function loadCommandRegistry() {
+  const sourcePath = path.resolve('src/shared/commands.ts')
+  const source = nodeFs.readFileSync(sourcePath, 'utf8')
+  const module = { exports: {} }
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS }
+  }).outputText
+
+  vm.runInNewContext(compiled, {
+    module,
+    exports: module.exports,
+    Set,
+    Error
+  })
+
+  return JSON.parse(
+    JSON.stringify({
+      shortcutDefinitions: module.exports.SHORTCUT_DEFINITIONS,
+      keyboardShortcuts: module.exports.KEYBOARD_SHORTCUTS
+    })
+  )
+}
+
+const commandRegistry = loadCommandRegistry()
 
 async function click(label) {
   const item = menuItem(label)
@@ -137,6 +166,18 @@ async function press(keyCode, modifiers = []) {
   await delay(150)
 }
 
+async function untilMenuItem(label, predicate, description, timeout = 6000) {
+  const started = Date.now()
+
+  while (Date.now() - started < timeout) {
+    const item = menuItem(label)
+    if (item && predicate(item)) return item
+    await delay(50)
+  }
+
+  assert.fail(`Timed out waiting for menu state: ${description}`)
+}
+
 async function run() {
   temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'monaco-notepad-runtime-'))
   const fakeBin = path.join(temporary, 'bin')
@@ -166,6 +207,7 @@ async function run() {
     if (window && !window.webContents.isLoading()) break
     await delay(50)
   }
+
   await until(
     `!!window.api && performance.getEntriesByType('resource').some(e => /monaco-editor.*editor.*api/.test(e.name))`,
     'editor module'
@@ -238,6 +280,145 @@ async function run() {
 
   console.log('PASS synchronized main, Preferences, native, and menu themes')
 
+  assert.equal(commandRegistry.shortcutDefinitions.length, 28)
+
+  for (const shortcut of commandRegistry.shortcutDefinitions) {
+    const label = shortcut.menuLabel ?? shortcut.label
+    const item = menuItem(label)
+
+    assert.ok(item, `Shortcut menu item: ${shortcut.id}`)
+    assert.equal(item.accelerator, shortcut.accelerator, `Shortcut accelerator: ${shortcut.id}`)
+
+    if (shortcut.registerAccelerator === false) {
+      assert.equal(item.registerAccelerator, false, `Shortcut registration policy: ${shortcut.id}`)
+    }
+  }
+
+  console.log('PASS native menu shortcut registry contract')
+
+  const initialRecentMenu = menuItem('Recent Files')
+  assert.ok(initialRecentMenu?.submenu, 'Recent Files submenu')
+  assert.deepEqual(
+    initialRecentMenu.submenu.items
+      .filter((item) => item.type !== 'separator')
+      .map((item) => item.label),
+    ['(Empty)', 'Clear Recent Files']
+  )
+  assert.equal(
+    initialRecentMenu.submenu.items.find((item) => item.label === 'Clear Recent Files')?.enabled,
+    false
+  )
+
+  const recentFixturePaths = Array.from({ length: 11 }, (_, index) =>
+    path.join(temporary, `recent-${index}.txt`)
+  )
+
+  for (const [index, filePath] of recentFixturePaths.entries()) {
+    await fs.writeFile(filePath, `recent ${index}`)
+  }
+
+  const missingRecentPath = path.join(temporary, 'recent-missing.txt')
+  const pollutedRecentFiles = [
+    recentFixturePaths[3],
+    missingRecentPath,
+    recentFixturePaths[1],
+    recentFixturePaths[3],
+    recentFixturePaths[0],
+    recentFixturePaths[2],
+    recentFixturePaths[4],
+    recentFixturePaths[5],
+    recentFixturePaths[6],
+    recentFixturePaths[7],
+    recentFixturePaths[8],
+    recentFixturePaths[9],
+    recentFixturePaths[10]
+  ]
+
+  const expectedRecentFiles = [
+    recentFixturePaths[3],
+    recentFixturePaths[1],
+    recentFixturePaths[0],
+    recentFixturePaths[2],
+    recentFixturePaths[4],
+    recentFixturePaths[5],
+    recentFixturePaths[6],
+    recentFixturePaths[7],
+    recentFixturePaths[8],
+    recentFixturePaths[9]
+  ]
+
+  await evaluate(`(async () => {
+    await window.api.preferences.set(
+      'recentFiles',
+      ${JSON.stringify(pollutedRecentFiles)}
+    )
+    await window.api.preferences.set(
+      'lastDocumentPath',
+      ${JSON.stringify(recentFixturePaths[0])}
+    )
+
+    // This existing menu-backed preference triggers installMenu(), which
+    // exercises normalization of the persisted Recent Files state.
+    // Keep its existing default value so the test does not alter editor behavior.
+    await window.api.preferences.set('showWhitespace', false)
+  })()`)
+
+  await delay(150)
+
+  const normalizedRecentMenu = menuItem('Recent Files')
+  assert.ok(normalizedRecentMenu?.submenu, 'normalized Recent Files submenu')
+
+  assert.deepEqual(
+    normalizedRecentMenu.submenu.items
+      .filter((item) => item.type !== 'separator' && item.label !== 'Clear Recent Files')
+      .map((item) => item.label),
+    expectedRecentFiles
+  )
+
+  assert.equal(
+    normalizedRecentMenu.submenu.items.find((item) => item.label === 'Clear Recent Files')?.enabled,
+    true
+  )
+
+  const normalizedRecentPreferences = JSON.parse(
+    await fs.readFile(path.join(temporary, 'profile', 'config.json'), 'utf8')
+  )
+
+  assert.deepEqual(normalizedRecentPreferences.recentFiles, expectedRecentFiles)
+  assert.equal(normalizedRecentPreferences.lastDocumentPath, recentFixturePaths[0])
+
+  await clickSubmenu('Recent Files', 'Clear Recent Files')
+
+  const clearedRecentMenu = menuItem('Recent Files')
+  assert.ok(clearedRecentMenu?.submenu, 'cleared Recent Files submenu')
+
+  assert.deepEqual(
+    clearedRecentMenu.submenu.items
+      .filter((item) => item.type !== 'separator')
+      .map((item) => item.label),
+    ['(Empty)', 'Clear Recent Files']
+  )
+
+  assert.equal(
+    clearedRecentMenu.submenu.items.find((item) => item.label === 'Clear Recent Files')?.enabled,
+    false
+  )
+
+  const clearedRecentPreferences = JSON.parse(
+    await fs.readFile(path.join(temporary, 'profile', 'config.json'), 'utf8')
+  )
+
+  assert.deepEqual(clearedRecentPreferences.recentFiles, [])
+  assert.equal(
+    clearedRecentPreferences.lastDocumentPath,
+    recentFixturePaths[0],
+    'clearing Recent Files must not clear Reopen Last Document state'
+  )
+
+  console.log(
+    'PASS Recent Files normalization, missing pruning, deduplication, cap, and clear state'
+  )
+
   await setText('middle-click source')
   await evaluate(`editor.setSelection(new monaco.Selection(1, 1, 1, 7))`)
   await evaluate(`window.api.setPrimarySelection('paste')`)
@@ -245,6 +426,12 @@ async function run() {
     `document.getElementById('editor').dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true }))`
   )
   await until(`editor.getValue() === 'paste-click source'`, 'primary-selection middle-click paste')
+
+  assert.equal(menuItem('Follow File').checked, false)
+  assert.equal(menuItem('Follow File').enabled, false)
+  assert.equal(menuItem('Read Only').checked, false)
+  assert.equal(menuItem('Read Only').enabled, true)
+
   await click('Follow File')
   assert.match(
     await evaluate(`document.getElementById('transient-status').innerText`),
@@ -267,16 +454,69 @@ async function run() {
     `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
     'untitled inspector close focus restore'
   )
-  console.log('PASS Document Inspector untitled state and focus restore')
+
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden`,
+    'Document Inspector open for Escape test'
+  )
+  await evaluate(`
+    document.activeElement.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      })
+    )
+  `)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'Document Inspector Escape and focus restore'
+  )
+
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden`,
+    'Document Inspector open for backdrop test'
+  )
+  await evaluate(
+    `document.querySelector('#document-inspector-dialog .modal-overlay[data-close-modal]').click()`
+  )
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'Document Inspector backdrop and focus restore'
+  )
+
+  await click('Keyboard Shortcuts')
+  await until(
+    `!document.getElementById('shortcuts-dialog').hidden`,
+    'Keyboard Shortcuts open for modal exclusion test'
+  )
+  await click('Document Inspector...')
+  await until(
+    `!document.getElementById('document-inspector-dialog').hidden &&
+      document.getElementById('shortcuts-dialog').hidden`,
+    'Document Inspector replaces Keyboard Shortcuts modal'
+  )
+  await evaluate(`document.getElementById('document-inspector-close').click()`)
+  await until(
+    `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
+    'modal exclusion inspector close focus restore'
+  )
+
+  console.log(
+    'PASS Document Inspector modal Close, Escape, backdrop, mutual exclusion, and focus restore'
+  )
 
   console.log('PASS Linux primary selection and middle-click paste')
 
   await setText('{"a":[1,true]}')
   await evaluate(`editor.setPosition({lineNumber: 1, column: 1})`)
   await click('Format JSON')
-  assert.equal(
-    await evaluate('editor.getValue()'),
-    '{\n    "a": [\n        1,\n        true\n    ]\n}'
+  await until(
+    `editor.getValue() === '{\\n    "a": [\\n        1,\\n        true\\n    ]\\n}' &&
+      editor.getModel().canUndo()`,
+    'formatted JSON and undo availability'
   )
   await click('Undo')
   await until(`editor.getValue() === '{"a":[1,true]}'`, 'undo formatted JSON')
@@ -314,14 +554,69 @@ async function run() {
   await setText('abc')
   await evaluate(`editor.setSelection(new monaco.Selection(1,1,1,4))`)
   await click('Read Only')
+  await untilMenuItem(
+    'Read Only',
+    (item) => item.checked && item.enabled,
+    'voluntary Read Only checked and toggleable'
+  )
+
+  for (const label of [
+    'Delete',
+    'Duplicate Line',
+    'Indent Selection',
+    'UPPERCASE',
+    'Base64 Encode',
+    'Trim Trailing Whitespace',
+    'Toggle Line Comment',
+    'Toggle Bookmark',
+    'Clear All Bookmarks',
+    'Time/Date',
+    'Add Final Newline'
+  ]) {
+    assert.equal(menuItem(label).enabled, false, `${label} disabled while read-only`)
+  }
+
+  assert.equal(menuItem('Find...').enabled, true)
+  assert.equal(menuItem('SHA-256 (Copy)').enabled, true)
+
   await click('Base64 Encode')
   assert.equal(await evaluate('editor.getValue()'), 'abc')
+  const expectedReadOnlySha256 = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+  clipboard.writeText('')
   await click('SHA-256 (Copy)')
-  assert.equal(
-    clipboard.readText(),
-    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
-  )
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (clipboard.readText() === expectedReadOnlySha256) break
+    await delay(50)
+  }
+  assert.equal(clipboard.readText(), expectedReadOnlySha256)
   await click('Read Only')
+  await untilMenuItem(
+    'Read Only',
+    (item) => !item.checked && item.enabled,
+    'voluntary Read Only cleared and toggleable'
+  )
+  await until(
+    `document.getElementById('transient-status').innerText === 'Read-only disabled' &&
+      !document.getElementById('transient-status').hidden`,
+    'Read Only disabled transient feedback'
+  )
+
+  for (const label of [
+    'Delete',
+    'Duplicate Line',
+    'Indent Selection',
+    'UPPERCASE',
+    'Base64 Encode',
+    'Trim Trailing Whitespace',
+    'Toggle Line Comment',
+    'Toggle Bookmark',
+    'Clear All Bookmarks',
+    'Time/Date',
+    'Add Final Newline'
+  ]) {
+    assert.equal(menuItem(label).enabled, true, `${label} restored after read-only`)
+  }
+
   console.log('PASS transforms, atomic multi-selection, one-step undo, and read-only hashing')
 
   await setText('hello world\nsecond line 😀')
@@ -343,6 +638,66 @@ async function run() {
   await press('F9', ['control', 'shift'])
   assert.equal(await evaluate(`editor.getLayoutInfo().contentLeft`), 10)
   console.log('PASS preferences, whitespace, collapsed gutter, security')
+
+  await click('Keyboard Shortcuts')
+  await until(
+    `!document.getElementById('shortcuts-dialog').hidden`,
+    'Keyboard Shortcuts dialog open for Close test'
+  )
+  assert.equal(
+    await evaluate(
+      `document.activeElement === document.querySelector('#shortcuts-dialog button[data-close-modal]')`
+    ),
+    true
+  )
+
+  const shortcutRows = await evaluate(`
+    [...document.querySelectorAll('#shortcuts-list li')].map((item) => ({
+      label: item.querySelector('span')?.textContent ?? '',
+      accelerator: item.querySelector('kbd')?.textContent ?? ''
+    }))
+  `)
+
+  assert.deepEqual(shortcutRows, commandRegistry.keyboardShortcuts)
+  await evaluate(`document.querySelector('#shortcuts-dialog button[data-close-modal]').click()`)
+  await until(
+    `document.getElementById('shortcuts-dialog').hidden && editor.hasTextFocus()`,
+    'Keyboard Shortcuts Close button and focus restore'
+  )
+
+  await click('Keyboard Shortcuts')
+  await until(
+    `!document.getElementById('shortcuts-dialog').hidden`,
+    'Keyboard Shortcuts dialog open for Escape test'
+  )
+  await evaluate(`
+    document.activeElement.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      })
+    )
+  `)
+  await until(
+    `document.getElementById('shortcuts-dialog').hidden && editor.hasTextFocus()`,
+    'Keyboard Shortcuts Escape and focus restore'
+  )
+
+  await click('Keyboard Shortcuts')
+  await until(
+    `!document.getElementById('shortcuts-dialog').hidden`,
+    'Keyboard Shortcuts dialog open for backdrop test'
+  )
+  await evaluate(
+    `document.querySelector('#shortcuts-dialog .modal-overlay[data-close-modal]').click()`
+  )
+  await until(
+    `document.getElementById('shortcuts-dialog').hidden && editor.hasTextFocus()`,
+    'Keyboard Shortcuts backdrop and focus restore'
+  )
+
+  console.log('PASS Keyboard Shortcuts open, focus, Close, Escape, and backdrop dismissal')
 
   await evaluate(`editor.setSelection(new monaco.Selection(1, 1, 1, 6))`)
   await click('UPPERCASE')
@@ -394,7 +749,10 @@ async function run() {
   await click('Trim Trailing Whitespace')
   assert.equal(await evaluate('editor.getValue()'), 'beta\n\talpha\n\nalpha')
   await click('Undo')
-  assert.equal(await evaluate('editor.getValue()'), 'beta  \n\talpha\t\n\nalpha')
+  await until(
+    `editor.getValue() === 'beta  \\n\\talpha\\t\\n\\nalpha'`,
+    'Trim Trailing Whitespace undo restoration'
+  )
   await click('Convert Tabs to Spaces')
   assert.equal(await evaluate('editor.getModel().getLineContent(2)'), '    alpha    ')
   await click('Convert Spaces to Tabs')
@@ -496,10 +854,40 @@ async function run() {
   assert.equal(await fs.readFile(savePath, 'utf8'), 'backup-enabled save')
   assert.equal(await fs.readFile(`${savePath}.bak`, 'utf8'), preBackupSaveText)
 
+  const statusBarDisplayBeforeNotificationTest = await evaluate(
+    `document.getElementById('statusbar').style.display`
+  )
+  await evaluate(`document.getElementById('statusbar').style.display = 'none'`)
+
   await click('Copy Full Path')
+  await until(
+    `document.getElementById('transient-status').innerText === 'Path copied' &&
+      !document.getElementById('transient-status').hidden`,
+    'Path copied transient feedback'
+  )
   assert.equal(clipboard.readText(), savePath)
+  assert.equal(
+    await evaluate(`document.getElementById('transient-status').parentElement?.id === 'statusbar'`),
+    false
+  )
+  assert.notEqual(
+    await evaluate(`getComputedStyle(document.getElementById('transient-status')).display`),
+    'none'
+  )
+  assert.equal(await evaluate(`document.getElementById('statusbar').style.display`), 'none')
+
   await click('Copy Filename')
+  await until(
+    `document.getElementById('transient-status').innerText === 'Filename copied' &&
+      !document.getElementById('transient-status').hidden`,
+    'Filename copied transient feedback'
+  )
   assert.equal(clipboard.readText(), path.basename(savePath))
+
+  await evaluate(
+    `document.getElementById('statusbar').style.display =
+      ${JSON.stringify(statusBarDisplayBeforeNotificationTest)}`
+  )
   await click('Reveal in File Manager')
   assert.deepEqual(revealedFiles, [savePath])
   await click('Open Terminal Here')
@@ -548,7 +936,12 @@ async function run() {
   console.log('PASS Document Inspector encoding and saved report separation')
 
   response = 0
+  clipboard.writeText('')
   await click('SHA-256')
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (/^[a-f0-9]{64}$/.test(clipboard.readText())) break
+    await delay(50)
+  }
   assert.match(clipboard.readText(), /^[a-f0-9]{64}$/)
   const originalTitle = await evaluate('document.title')
   const copyPath = path.join(temporary, 'copy-only.txt')
@@ -563,15 +956,30 @@ async function run() {
   response = 0
   await click('Reload from Disk')
   await until(`editor.getValue() === 'disk reload'`, 'explicit reload')
+  await until(
+    `document.getElementById('transient-status').innerText === 'Reloaded from disk' &&
+      !document.getElementById('transient-status').hidden`,
+    'Reloaded from disk transient feedback'
+  )
+
   await setText('dirty edits')
   await fs.writeFile(savePath, 'disk revert')
   response = 1
   await click('Revert to Saved')
   assert.equal(await evaluate('editor.getValue()'), 'dirty edits')
+
   response = 0
   await click('Revert to Saved')
   await until(`editor.getValue() === 'disk revert'`, 'confirmed revert')
-  console.log('PASS file utilities, checksum, save copy, reload, and guarded revert')
+  await until(
+    `document.getElementById('transient-status').innerText === 'Reverted to saved file' &&
+      !document.getElementById('transient-status').hidden`,
+    'Reverted to saved file transient feedback'
+  )
+
+  console.log(
+    'PASS file utilities, checksum, save copy, reload, guarded revert, and transient feedback'
+  )
   const fileChangeMessagesBeforeSelfSave = messages.filter((m) => m.title === 'File Changed').length
   await setText('saved again')
   await click('Save')
@@ -609,6 +1017,11 @@ async function run() {
     await evaluate(`monaco.editor.getDiffEditors()[0].getModel().modified.getValue()`),
     'disk comparison'
   )
+  await until(
+    `monaco.editor.getDiffEditors().length === 1 &&
+      monaco.editor.getDiffEditors()[0].getLineChanges() !== null`,
+    'compare diff computation'
+  )
   await evaluate(`document.getElementById('compare-keep').click()`)
   await until(`document.getElementById('compare-view').hidden`, 'close comparison')
   assert.equal(await evaluate('editor.getValue()'), 'current buffer')
@@ -619,6 +1032,14 @@ async function run() {
   await evaluate(`window.dispatchEvent(new Event('focus'))`)
   await delay(200)
   assert.match(await evaluate(`document.getElementById('statusbar').innerText`), /Read Only/)
+  await untilMenuItem(
+    'Read Only',
+    (item) => item.checked && !item.enabled,
+    'filesystem Read Only checked and non-toggleable'
+  )
+  assert.equal(menuItem('Delete').enabled, false)
+  assert.equal(menuItem('Base64 Encode').enabled, false)
+
   await setText('read only edits')
   await click('Save')
   assert.equal(await fs.readFile(savePath, 'utf8'), 'disk comparison')
@@ -628,6 +1049,14 @@ async function run() {
   await click('Save As...')
   await until(`!document.title.startsWith('*')`, 'read-only save as')
   assert.equal(await fs.readFile(savePath, 'utf8'), 'read only edits')
+  await untilMenuItem(
+    'Read Only',
+    (item) => !item.checked && item.enabled,
+    'Save As restored editable native menu state'
+  )
+  assert.equal(menuItem('Delete').enabled, true)
+  assert.equal(menuItem('Base64 Encode').enabled, true)
+
   console.log(
     'PASS save, self-save suppression, repeated external replacement, read-only guard, Save As'
   )
@@ -1253,6 +1682,29 @@ async function run() {
     `/Following/.test(document.getElementById('follow-status').innerText) && editor.getOption(monaco.editor.EditorOption.readOnly)`,
     'follow mode entry'
   )
+  await untilMenuItem(
+    'Follow File',
+    (item) => item.checked && item.enabled,
+    'Follow File checked while active'
+  )
+  await untilMenuItem(
+    'Read Only',
+    (item) => item.checked && !item.enabled,
+    'Follow lock reflected by Read Only'
+  )
+
+  for (const label of ['Save', 'Save As...', 'Reload from Disk', 'Revert to Saved']) {
+    assert.equal(menuItem(label).enabled, false, `${label} disabled while following`)
+  }
+
+  const reopenWithEncoding = menuItem('Reopen With Encoding')
+  assert.ok(reopenWithEncoding?.submenu)
+  for (const item of reopenWithEncoding.submenu.items) {
+    assert.equal(item.enabled, false, `${item.label} disabled while following`)
+  }
+
+  assert.equal(menuItem('Delete').enabled, false)
+  assert.equal(menuItem('Base64 Encode').enabled, false)
 
   await click('Document Inspector...')
   await until(
@@ -1381,12 +1833,22 @@ async function run() {
   )
   await evaluate(`editor.setScrollTop(0)`)
   await until(
-    `/paused/.test(document.getElementById('follow-status').innerText)`,
+    `editor.getScrollTop() === 0 &&
+      /paused/.test(document.getElementById('follow-status').innerText)`,
     'follow scroll pause'
   )
+  const pausedScrollTop = await evaluate(`editor.getScrollTop()`)
   await fs.appendFile(followedPath, 'while paused\n')
   await until(`editor.getValue().endsWith('while paused\\n')`, 'append while scroll paused')
-  assert.equal(await evaluate(`editor.getScrollTop()`), 0)
+  await until(
+    `/paused/.test(document.getElementById('follow-status').innerText)`,
+    'follow remains paused after append'
+  )
+  const pausedScrollTopAfterAppend = await evaluate(`editor.getScrollTop()`)
+  assert.ok(
+    Math.abs(pausedScrollTopAfterAppend - pausedScrollTop) <= 2,
+    `Follow paused scroll moved from ${pausedScrollTop} to ${pausedScrollTopAfterAppend}`
+  )
   await evaluate(`editor.setScrollTop(editor.getScrollHeight())`)
   await until(
     `!/paused/.test(document.getElementById('follow-status').innerText)`,
@@ -1420,6 +1882,27 @@ async function run() {
 
   await click('Follow File')
   await until(`document.getElementById('follow-status').hidden`, 'follow mode exit')
+  await untilMenuItem(
+    'Follow File',
+    (item) => !item.checked && item.enabled,
+    'Follow File restored after exit'
+  )
+  await untilMenuItem(
+    'Read Only',
+    (item) => item.checked && item.enabled,
+    'prior voluntary Read Only restored after Follow'
+  )
+
+  for (const label of ['Save', 'Save As...', 'Reload from Disk', 'Revert to Saved']) {
+    assert.equal(menuItem(label).enabled, true, `${label} restored after Follow`)
+  }
+
+  const restoredReopenWithEncoding = menuItem('Reopen With Encoding')
+  assert.ok(restoredReopenWithEncoding?.submenu)
+  for (const item of restoredReopenWithEncoding.submenu.items) {
+    assert.equal(item.enabled, true, `${item.label} restored after Follow`)
+  }
+
   assert.equal(
     await evaluate(`editor.getOption(monaco.editor.EditorOption.readOnly)`),
     true,
@@ -1444,7 +1927,13 @@ async function run() {
 
   const valueBeforeLargeFilePrompt = await evaluate('editor.getValue()')
   openPath = path.join(temporary, 'large.txt')
-  await fs.writeFile(openPath, 'x'.repeat(20 * 1024 * 1024))
+  const largeFileSize = 20 * 1024 * 1024
+  const largeFileChunk = `${'x'.repeat(8191)}\n`
+  assert.equal(Buffer.byteLength(largeFileChunk), 8192)
+  assert.equal(largeFileSize % Buffer.byteLength(largeFileChunk), 0)
+  const largeFileText = largeFileChunk.repeat(largeFileSize / Buffer.byteLength(largeFileChunk))
+  assert.equal(Buffer.byteLength(largeFileText), largeFileSize)
+  await fs.writeFile(openPath, largeFileText)
   response = 1
   await click('Open...')
   assert.equal(await evaluate('editor.getValue()'), valueBeforeLargeFilePrompt)
@@ -1452,10 +1941,28 @@ async function run() {
   response = 0
   await click('Open...')
   await until(
-    `editor.getModel().getValueLength() === 20 * 1024 * 1024`,
-    'large file opened in full'
+    `(() => {
+      const detail = document.getElementById('open-progress-detail').innerText
+      return /final step cannot be cancelled/i.test(detail) ||
+        editor.getModel().getValueLength() === ${largeFileSize}
+    })()`,
+    'large file read completion',
+    30000
+  )
+  await until(
+    `editor.getModel().getValueLength() === ${largeFileSize}`,
+    'large file opened in full',
+    30000
   )
   assert.equal(await evaluate(`document.getElementById('open-progress-dialog').hidden`), true)
+  assert.equal(
+    await evaluate(`editor.getOption(monaco.editor.EditorOption.renderWhitespace)`),
+    'none'
+  )
+  assert.equal(
+    await evaluate(`editor.getOption(monaco.editor.EditorOption.renderControlCharacters)`),
+    false
+  )
   assert.equal(await evaluate(`document.getElementById('open-progress-bar').max`), 20 * 1024 * 1024)
   assert.equal(
     await evaluate(`document.getElementById('open-progress-bar').value`),

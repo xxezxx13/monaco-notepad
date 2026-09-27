@@ -33,7 +33,8 @@ import { createSaveBaselineTracker, fileSignature, type ConflictChoice } from '.
 import { FollowReader } from './follow'
 import { portalThemeFromOutput, type PortalTheme } from './portal'
 import { selectionDigests, type SelectionHashAlgorithm } from './selection-hash'
-import { installMenu, recordRecentFile, setFollowMenuState } from './menu'
+import { installMenu, recordRecentFile, setMenuContextState } from './menu'
+import type { MenuContextState } from '../shared/commands'
 import {
   preferences,
   getFilePosition,
@@ -425,6 +426,30 @@ if (!hasSingleInstanceLock) {
   })
 }
 
+function openExternalWebUrl(rawUrl: string): void {
+  try {
+    const url = new URL(rawUrl)
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+
+    void shell.openExternal(url.toString())
+  } catch {
+    // Ignore malformed or unsupported external URLs.
+  }
+}
+
+function installRendererNavigationPolicy(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalWebUrl(url)
+    return { action: 'deny' }
+  })
+
+  window.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    openExternalWebUrl(url)
+  })
+}
+
 function createPreferencesWindow(): void {
   if (preferencesWindow) {
     preferencesWindow.show()
@@ -449,6 +474,8 @@ function createPreferencesWindow(): void {
       sandbox: true
     }
   })
+
+  installRendererNavigationPolicy(preferencesWindow)
 
   preferencesWindow.on('ready-to-show', () => {
     preferencesWindow?.show()
@@ -521,10 +548,26 @@ function createWindow(): void {
     mainWindow = null
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
+  // Chromium consumes standard Ctrl++ / Ctrl+- editor zoom chords before
+  // the renderer can reliably observe them. Own editor zoom at the
+  // WebContents boundary and route it through the same command path as
+  // the View menu while preventing Chromium page zoom.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
+
+    let command: 'zoom-in' | 'zoom-out' | 'zoom-reset' | null = null
+
+    if (input.key === '+') command = 'zoom-in'
+    else if (input.key === '-') command = 'zoom-out'
+    else if (input.key === '0') command = 'zoom-reset'
+
+    if (!command) return
+
+    event.preventDefault()
+    mainWindow?.webContents.send('menu:command', command)
   })
+
+  installRendererNavigationPolicy(mainWindow)
 
   installMenu(mainWindow)
 
@@ -1001,9 +1044,40 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'file:print',
     async (
-      _event,
+      event,
       { title, text, fontFamily }: { title: string; text: string; fontFamily: string }
     ) => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+
+      if (!window) throw new Error('Unable to resolve application window')
+
+      try {
+        const printers = await event.sender.getPrintersAsync()
+
+        if (printers.length === 0) {
+          await dialog.showMessageBox(window, {
+            type: 'error',
+            title: 'Print Error',
+            message: 'No printers are configured.',
+            detail:
+              'Monaco Notepad could not find any CUPS printer destinations. Add a printer in your Linux system settings or CUPS, then try again.',
+            buttons: ['OK']
+          })
+          return
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+
+        await dialog.showMessageBox(window, {
+          type: 'error',
+          title: 'Print Error',
+          message: 'Available printers could not be determined.',
+          detail,
+          buttons: ['OK']
+        })
+        return
+      }
+
       const printWindow = new BrowserWindow({
         show: false,
         webPreferences: {
@@ -1012,10 +1086,12 @@ app.whenReady().then(() => {
           sandbox: true
         }
       })
+
       const escapeHtml = (value: string): string =>
         value.replace(/[&<>"']/g, (character) => {
           return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!
         })
+
       const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>@media print { body { margin: 1in; font-family: ${escapeHtml(fontFamily)}, monospace; font-size: 12pt; color: #000; background: #fff; white-space: pre-wrap; overflow-wrap: break-word; } }</style>
@@ -1023,8 +1099,40 @@ app.whenReady().then(() => {
 
       try {
         await printWindow.loadURL(`data:text/html,${encodeURIComponent(html)}`)
-        await new Promise<void>((resolvePrint) => {
-          printWindow.webContents.print({ silent: false }, () => resolvePrint())
+
+        const printResult = await new Promise<{
+          success: boolean
+          failureReason: string
+        }>((resolvePrint) => {
+          printWindow.webContents.print(
+            { silent: false },
+            (success, failureReason) => {
+              resolvePrint({ success, failureReason })
+            }
+          )
+        })
+
+        if (
+          !printResult.success &&
+          printResult.failureReason !== 'Print job canceled'
+        ) {
+          await dialog.showMessageBox(window, {
+            type: 'error',
+            title: 'Print Error',
+            message: 'The document could not be printed.',
+            detail: printResult.failureReason || 'Unknown print error',
+            buttons: ['OK']
+          })
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+
+        await dialog.showMessageBox(window, {
+          type: 'error',
+          title: 'Print Error',
+          message: 'The document could not be printed.',
+          detail,
+          buttons: ['OK']
         })
       } finally {
         if (!printWindow.isDestroyed()) printWindow.close()
@@ -1175,12 +1283,14 @@ app.whenReady().then(() => {
     if (watchedFilePath) watchedFileSignature = fileSignature(watchedFilePath)
   })
 
-  ipcMain.handle(
-    'file:follow-menu-state',
-    (_event, state: { checked: boolean; enabled: boolean }) => {
-      setFollowMenuState(Boolean(state.checked), Boolean(state.enabled))
-    }
-  )
+  ipcMain.handle('menu:context-state', (_event, state: MenuContextState) => {
+    setMenuContextState({
+      followActive: Boolean(state.followActive),
+      followEnabled: Boolean(state.followEnabled),
+      readOnly: Boolean(state.readOnly),
+      readOnlyToggleEnabled: Boolean(state.readOnlyToggleEnabled)
+    })
+  })
 
   ipcMain.handle(
     'file:confirm-external-change',

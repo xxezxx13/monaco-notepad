@@ -1,9 +1,82 @@
-import { app, BrowserWindow, dialog, Menu, nativeTheme } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  Menu,
+  nativeTheme,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { existsSync } from 'node:fs'
+import {
+  MENU_COMMAND_IDS,
+  getShortcutDefinition,
+  isModifyingCommand,
+  type MenuCommand,
+  type MenuContextState,
+  type ShortcutId
+} from '../shared/commands'
 import { preferences } from './preferences'
 import type { BomlessFileEncoding } from './files'
 
 const maximumRecentFiles = 10
+
+const followBlockedCommands = new Set<MenuCommand>([
+  'save',
+  'save-as',
+  'reload',
+  'revert',
+  'reopen-encoding:utf8',
+  'reopen-encoding:utf8-bom',
+  'reopen-encoding:utf16le',
+  'reopen-encoding:utf16be',
+  'reopen-encoding:windows1252'
+])
+
+let menuContextState: MenuContextState = {
+  followActive: false,
+  followEnabled: false,
+  readOnly: false,
+  readOnlyToggleEnabled: true
+}
+
+function menuCommandId(command: string): string {
+  return `command:${command}`
+}
+
+function applyMenuContextState(menu: Menu, state: MenuContextState): void {
+  const followItem = menu.getMenuItemById('follow-file')
+  if (followItem) {
+    followItem.checked = state.followActive
+    followItem.enabled = state.followEnabled
+  }
+
+  const readOnlyItem = menu.getMenuItemById('toggle-read-only')
+  if (readOnlyItem) {
+    readOnlyItem.checked = state.readOnly
+    readOnlyItem.enabled = state.readOnlyToggleEnabled
+  }
+
+  for (const command of MENU_COMMAND_IDS) {
+    const item = menu.getMenuItemById(menuCommandId(command))
+    if (!item) continue
+
+    item.enabled =
+      !(state.readOnly && isModifyingCommand(command)) &&
+      !(state.followActive && followBlockedCommands.has(command))
+  }
+}
+
+function shortcutMenuProperties(
+  id: ShortcutId
+): Pick<MenuItemConstructorOptions, 'label' | 'accelerator' | 'registerAccelerator'> {
+  const shortcut = getShortcutDefinition(id)
+
+  return {
+    label: shortcut.menuLabel ?? shortcut.label,
+    accelerator: shortcut.accelerator,
+    ...(shortcut.registerAccelerator === false ? { registerAccelerator: false } : {})
+  }
+}
 
 function setThemePreference(theme: 'system' | 'light' | 'dark'): void {
   preferences.set('theme', theme)
@@ -15,9 +88,21 @@ function setThemePreference(theme: 'system' | 'light' | 'dark'): void {
 }
 
 function existingRecentFiles(): string[] {
-  const recentFiles = preferences.get('recentFiles').filter((filePath) => existsSync(filePath))
+  const storedRecentFiles = preferences.get('recentFiles')
+  const seen = new Set<string>()
 
-  if (recentFiles.length !== preferences.get('recentFiles').length) {
+  const recentFiles = storedRecentFiles
+    .filter((filePath) => {
+      if (!existsSync(filePath) || seen.has(filePath)) return false
+      seen.add(filePath)
+      return true
+    })
+    .slice(0, maximumRecentFiles)
+
+  if (
+    recentFiles.length !== storedRecentFiles.length ||
+    recentFiles.some((filePath, index) => filePath !== storedRecentFiles[index])
+  ) {
     preferences.set('recentFiles', recentFiles)
   }
 
@@ -36,11 +121,13 @@ export function recordRecentFile(
   installMenu(window)
 }
 
-export function setFollowMenuState(checked: boolean, enabled: boolean): void {
-  const item = Menu.getApplicationMenu()?.getMenuItemById('follow-file')
-  if (!item) return
-  item.checked = checked
-  item.enabled = enabled
+export function setMenuContextState(state: MenuContextState): void {
+  menuContextState = { ...state }
+
+  const menu = Menu.getApplicationMenu()
+  if (!menu) return
+
+  applyMenuContextState(menu, menuContextState)
 }
 
 export function installMenu(window: BrowserWindow): void {
@@ -54,18 +141,36 @@ export function installMenu(window: BrowserWindow): void {
       largeFileWarningMiB: preferences.get('largeFileWarningMiB')
     })
   }
+  const recentFileItems: MenuItemConstructorOptions[] =
+    recentFiles.length > 0
+      ? recentFiles.map((filePath) => ({
+          label: filePath,
+          click: () => window.webContents.send('app:open-file-requested', filePath)
+        }))
+      : [{ label: '(Empty)', enabled: false }]
+
+  recentFileItems.push(
+    { type: 'separator' },
+    {
+      label: 'Clear Recent Files',
+      enabled: recentFiles.length > 0,
+      click: () => {
+        preferences.set('recentFiles', [])
+        installMenu(window)
+      }
+    }
+  )
+
   const menu = Menu.buildFromTemplate([
     {
       label: 'File',
       submenu: [
         {
-          label: 'New',
-          accelerator: 'CmdOrCtrl+N',
+          ...shortcutMenuProperties('new'),
           click: () => window.webContents.send('menu:command', 'new')
         },
         {
-          label: 'Open...',
-          accelerator: 'CmdOrCtrl+O',
+          ...shortcutMenuProperties('open'),
           click: () => window.webContents.send('menu:command', 'open')
         },
         {
@@ -74,13 +179,7 @@ export function installMenu(window: BrowserWindow): void {
         },
         {
           label: 'Recent Files',
-          submenu:
-            recentFiles.length > 0
-              ? recentFiles.map((filePath) => ({
-                  label: filePath,
-                  click: () => window.webContents.send('app:open-file-requested', filePath)
-                }))
-              : [{ label: '(Empty)', enabled: false }]
+          submenu: recentFileItems
         },
         { type: 'separator' },
         {
@@ -92,28 +191,30 @@ export function installMenu(window: BrowserWindow): void {
             ['UTF-16 BE', 'reopen-encoding:utf16be'],
             ['ANSI (Windows-1252)', 'reopen-encoding:windows1252']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
         },
         {
-          label: 'Reload from Disk',
-          accelerator: 'CmdOrCtrl+Shift+R',
+          ...shortcutMenuProperties('reload'),
+          id: menuCommandId('reload'),
           click: () => window.webContents.send('menu:command', 'reload')
         },
         {
           label: 'Revert to Saved',
+          id: menuCommandId('revert'),
           click: () => window.webContents.send('menu:command', 'revert')
         },
         { type: 'separator' },
         {
-          label: 'Save',
-          accelerator: 'CmdOrCtrl+S',
+          ...shortcutMenuProperties('save'),
+          id: menuCommandId('save'),
           click: () => window.webContents.send('menu:command', 'save')
         },
         {
-          label: 'Save As...',
-          accelerator: 'CmdOrCtrl+Shift+S',
+          ...shortcutMenuProperties('save-as'),
+          id: menuCommandId('save-as'),
           click: () => window.webContents.send('menu:command', 'save-as')
         },
         {
@@ -121,8 +222,7 @@ export function installMenu(window: BrowserWindow): void {
           click: () => window.webContents.send('menu:command', 'save-copy')
         },
         {
-          label: 'Print...',
-          accelerator: 'CmdOrCtrl+P',
+          ...shortcutMenuProperties('print'),
           click: () => window.webContents.send('menu:command', 'print')
         },
         { type: 'separator' },
@@ -136,6 +236,7 @@ export function installMenu(window: BrowserWindow): void {
             ['Document Inspector...', 'document-inspector'],
             ['SHA-256', 'sha256']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -158,13 +259,11 @@ export function installMenu(window: BrowserWindow): void {
       label: 'Edit',
       submenu: [
         {
-          label: 'Undo',
-          accelerator: 'CmdOrCtrl+Z',
+          ...shortcutMenuProperties('undo'),
           click: () => window.webContents.send('menu:command', 'undo')
         },
         {
-          label: 'Redo',
-          accelerator: 'Ctrl+Y',
+          ...shortcutMenuProperties('redo'),
           click: () => window.webContents.send('menu:command', 'redo')
         },
         { type: 'separator' },
@@ -173,6 +272,7 @@ export function installMenu(window: BrowserWindow): void {
         { role: 'paste' },
         {
           label: 'Delete',
+          id: menuCommandId('delete'),
           click: () => window.webContents.send('menu:command', 'delete')
         },
         { type: 'separator' },
@@ -195,6 +295,7 @@ export function installMenu(window: BrowserWindow): void {
             ['Remove Duplicate Lines', 'remove-duplicate-lines'],
             ['Delete Empty Lines', 'delete-empty-lines']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -207,6 +308,7 @@ export function installMenu(window: BrowserWindow): void {
             ['Convert Tabs to Spaces', 'tabs-to-spaces'],
             ['Convert Spaces to Tabs', 'spaces-to-tabs']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -218,6 +320,7 @@ export function installMenu(window: BrowserWindow): void {
             ['lowercase', 'case-lower'],
             ['Title Case', 'case-title']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -227,14 +330,17 @@ export function installMenu(window: BrowserWindow): void {
           submenu: [
             {
               label: 'Format JSON',
+              id: menuCommandId('transform:format-json'),
               click: () => window.webContents.send('menu:command', 'transform:format-json')
             },
             {
               label: 'Minify JSON',
+              id: menuCommandId('transform:minify-json'),
               click: () => window.webContents.send('menu:command', 'transform:minify-json')
             },
             {
               label: 'Format XML',
+              id: menuCommandId('transform:format-xml'),
               click: () => window.webContents.send('menu:command', 'transform:format-xml')
             },
             { type: 'separator' },
@@ -246,6 +352,7 @@ export function installMenu(window: BrowserWindow): void {
               ['Hex Encode', 'transform:hex-encode'],
               ['Hex Decode', 'transform:hex-decode']
             ].map(([label, command]) => ({
+              id: menuCommandId(command),
               label,
               click: () => window.webContents.send('menu:command', command)
             })),
@@ -256,6 +363,7 @@ export function installMenu(window: BrowserWindow): void {
                 ['72 Columns', 'transform:reflow-72'],
                 ['80 Columns', 'transform:reflow-80']
               ].map(([label, command]) => ({
+                id: menuCommandId(command),
                 label,
                 click: () => window.webContents.send('menu:command', command)
               }))
@@ -268,6 +376,7 @@ export function installMenu(window: BrowserWindow): void {
                 ['NFKC', 'transform:normalize-nfkc'],
                 ['NFKD', 'transform:normalize-nfkd']
               ].map(([label, command]) => ({
+                id: menuCommandId(command),
                 label,
                 click: () => window.webContents.send('menu:command', command)
               }))
@@ -280,6 +389,7 @@ export function installMenu(window: BrowserWindow): void {
                 ['SHA-1 (Legacy Checksum - Copy)', 'hash:sha1'],
                 ['MD5 (Legacy Checksum - Copy)', 'hash:md5']
               ].map(([label, command]) => ({
+                id: menuCommandId(command),
                 label,
                 click: () => window.webContents.send('menu:command', command)
               }))
@@ -288,24 +398,21 @@ export function installMenu(window: BrowserWindow): void {
         },
         {
           label: 'Trim Trailing Whitespace',
+          id: menuCommandId('trim-trailing-whitespace'),
           click: () => window.webContents.send('menu:command', 'trim-trailing-whitespace')
         },
         {
-          label: 'Toggle Line Comment',
-          accelerator: 'CmdOrCtrl+/',
-          registerAccelerator: false,
+          ...shortcutMenuProperties('toggle-line-comment'),
+          id: menuCommandId('toggle-line-comment'),
           click: () => window.webContents.send('menu:command', 'toggle-line-comment')
         },
         {
-          label: 'Go to Matching Bracket',
-          accelerator: 'CmdOrCtrl+Shift+\\',
-          registerAccelerator: false,
+          ...shortcutMenuProperties('matching-bracket'),
           click: () => window.webContents.send('menu:command', 'matching-bracket')
         },
         { type: 'separator' },
         {
-          label: 'Filter Lines...',
-          accelerator: 'CmdOrCtrl+Shift+F',
+          ...shortcutMenuProperties('filter-lines'),
           click: () => window.webContents.send('menu:command', 'filter-lines')
         },
         {
@@ -313,23 +420,23 @@ export function installMenu(window: BrowserWindow): void {
           click: () => window.webContents.send('menu:command', 'regex-extract')
         },
         {
-          label: 'Find...',
-          accelerator: 'CmdOrCtrl+F',
+          ...shortcutMenuProperties('find'),
           click: () => window.webContents.send('menu:command', 'find')
         },
         {
-          label: 'Find Next',
-          accelerator: 'F3',
+          ...shortcutMenuProperties('find-next'),
           click: () => window.webContents.send('menu:command', 'find-next')
         },
         {
-          label: 'Replace...',
-          accelerator: 'CmdOrCtrl+H',
+          ...shortcutMenuProperties('find-previous'),
+          click: () => window.webContents.send('menu:command', 'find-previous')
+        },
+        {
+          ...shortcutMenuProperties('replace'),
           click: () => window.webContents.send('menu:command', 'replace')
         },
         {
-          label: 'Go To...',
-          accelerator: 'CmdOrCtrl+G',
+          ...shortcutMenuProperties('go-to'),
           click: () => window.webContents.send('menu:command', 'go-to')
         },
         { type: 'separator' },
@@ -337,49 +444,46 @@ export function installMenu(window: BrowserWindow): void {
           label: 'Bookmarks',
           submenu: [
             {
-              label: 'Toggle Bookmark',
-              accelerator: 'Ctrl+Shift+F2',
+              ...shortcutMenuProperties('bookmark-toggle'),
+              id: menuCommandId('bookmark-toggle'),
               click: () => window.webContents.send('menu:command', 'bookmark-toggle')
             },
             {
-              label: 'Next Bookmark',
-              accelerator: 'F2',
+              ...shortcutMenuProperties('bookmark-next'),
               click: () => window.webContents.send('menu:command', 'bookmark-next')
             },
             {
-              label: 'Previous Bookmark',
-              accelerator: 'Shift+F2',
+              ...shortcutMenuProperties('bookmark-previous'),
               click: () => window.webContents.send('menu:command', 'bookmark-previous')
             },
             {
               label: 'Clear All Bookmarks',
+              id: menuCommandId('bookmark-clear'),
               click: () => window.webContents.send('menu:command', 'bookmark-clear')
             }
           ]
         },
         { type: 'separator' },
         {
-          label: 'Select All',
-          accelerator: 'CmdOrCtrl+A',
+          ...shortcutMenuProperties('select-all'),
           click: () => window.webContents.send('menu:command', 'select-all')
         },
         {
-          label: 'Time/Date',
-          accelerator: 'F5',
+          ...shortcutMenuProperties('time-date'),
+          id: menuCommandId('time-date'),
           click: () => window.webContents.send('menu:command', 'time-date')
         },
         { type: 'separator' },
         {
-          label: 'Read Only',
+          id: 'toggle-read-only',
+          ...shortcutMenuProperties('toggle-read-only'),
           type: 'checkbox',
-          accelerator: 'Ctrl+Shift+L',
           checked: false,
           click: () => window.webContents.send('menu:command', 'toggle-read-only')
         },
         { type: 'separator' },
         {
-          label: 'Preferences...',
-          accelerator: 'CmdOrCtrl+,',
+          ...shortcutMenuProperties('preferences'),
           click: () => window.webContents.send('menu:command', 'preferences')
         }
       ]
@@ -479,6 +583,7 @@ export function installMenu(window: BrowserWindow): void {
             ['CSS', 'language:css'],
             ['C / C++', 'language:cpp']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -492,6 +597,7 @@ export function installMenu(window: BrowserWindow): void {
             ['UTF-16 BE', 'encoding:utf16be'],
             ['ANSI (Windows-1252)', 'encoding:windows1252']
           ].map(([label, command]) => ({
+            id: menuCommandId(command),
             label,
             click: () => window.webContents.send('menu:command', command)
           }))
@@ -514,10 +620,12 @@ export function installMenu(window: BrowserWindow): void {
           submenu: [
             {
               label: 'Add Final Newline',
+              id: menuCommandId('add-final-newline'),
               click: () => window.webContents.send('menu:command', 'add-final-newline')
             },
             {
               label: 'Remove Final Newline',
+              id: menuCommandId('remove-final-newline'),
               click: () => window.webContents.send('menu:command', 'remove-final-newline')
             }
           ]
@@ -532,6 +640,7 @@ export function installMenu(window: BrowserWindow): void {
           label: 'Follow File',
           type: 'checkbox',
           checked: false,
+          enabled: false,
           click: () => window.webContents.send('menu:command', 'follow-file')
         },
         {
@@ -578,10 +687,9 @@ export function installMenu(window: BrowserWindow): void {
           ]
         },
         {
-          label: 'Show Line Numbers',
+          ...shortcutMenuProperties('show-line-numbers'),
           type: 'checkbox',
-          // Ctrl+Shift+L selects all occurrences in Monaco's multicursor feature.
-          accelerator: 'Ctrl+Shift+F9',
+          // Keep Ctrl+Shift+L reserved for Monaco's multicursor Select All Occurrences action.
           checked: preferences.get('showLineNumbers'),
           click: (item) => {
             preferences.set('showLineNumbers', item.checked)
@@ -617,8 +725,7 @@ export function installMenu(window: BrowserWindow): void {
           }))
         },
         {
-          label: 'Full Screen',
-          accelerator: 'F11',
+          ...shortcutMenuProperties('full-screen'),
           click: () => {
             const enabled = !window.isFullScreen()
             window.setFullScreen(enabled)
@@ -628,21 +735,15 @@ export function installMenu(window: BrowserWindow): void {
         },
         { type: 'separator' },
         {
-          label: 'Zoom In',
-          accelerator: 'CmdOrCtrl+Plus',
-          registerAccelerator: false,
+          ...shortcutMenuProperties('zoom-in'),
           click: () => window.webContents.send('menu:command', 'zoom-in')
         },
         {
-          label: 'Zoom Out',
-          accelerator: 'CmdOrCtrl+-',
-          registerAccelerator: false,
+          ...shortcutMenuProperties('zoom-out'),
           click: () => window.webContents.send('menu:command', 'zoom-out')
         },
         {
-          label: 'Reset Zoom',
-          accelerator: 'CmdOrCtrl+0',
-          registerAccelerator: false,
+          ...shortcutMenuProperties('zoom-reset'),
           click: () => window.webContents.send('menu:command', 'zoom-reset')
         }
       ]
@@ -650,6 +751,11 @@ export function installMenu(window: BrowserWindow): void {
     {
       label: 'Help',
       submenu: [
+        {
+          label: 'Keyboard Shortcuts',
+          click: () => window.webContents.send('menu:command', 'show-keyboard-shortcuts')
+        },
+        { type: 'separator' },
         {
           label: 'About Monaco Notepad',
           click: () => {
@@ -666,5 +772,6 @@ export function installMenu(window: BrowserWindow): void {
     }
   ])
 
+  applyMenuContextState(menu, menuContextState)
   Menu.setApplicationMenu(menu)
 }
