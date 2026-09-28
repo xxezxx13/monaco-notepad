@@ -1,52 +1,69 @@
-# Monaco Notepad v3 Release Notes
+# Monaco Notepad v4 Release Notes
 
-Monaco Notepad v3 is a focused visual and interaction modernization of the Linux desktop editor. It preserves the single-document Notepad-style architecture and V2 file-safety behavior while rebuilding the interface around a more cohesive Graphite Utility design language.
+Monaco Notepad v4 focuses on interaction consistency, recovery clarity, security hardening, and regression resistance. It builds on the V3 Graphite Utility interface while strengthening the command, menu, dialog, file-opening, printing, and automated-validation architecture.
 
-## Editor shell and visual language
+## Commands and keyboard shortcuts
 
-- Introduced the V3 Graphite Utility visual foundation.
-- Modernized the main editor shell while keeping the editor surface dominant.
-- Refined Graphite Dark as the flagship dark appearance.
-- Refined Clean Light as an intentionally designed light appearance.
-- Preserved synchronized System-theme behavior across the main window, Preferences, Electron native theme handling, and menus.
-- Unified spacing, borders, typography, control sizing, and interaction feedback across the application.
+- Added a canonical shared registry for application commands and keyboard shortcuts.
+- Centralized shortcut labels, accelerators, modifying-command metadata, and menu integration.
+- Added Find Previous as a canonical `Shift+F3` command.
+- Preserved Monaco-owned shortcuts where Monaco remains the correct execution path.
+- Added deterministic runtime coverage for all 28 canonical shortcuts: 23 native-menu routes and 5 Monaco-owned keyboard routes.
 
-## Controls and working surfaces
+## Dialog and menu consistency
 
-- Modernized text fields, selects, buttons, checkboxes, and other compact controls.
-- Modernized Filter Lines and Regex Extract without changing their underlying behavior.
-- Modernized Compare Against Disk while preserving its existing safety semantics.
-- Improved narrow-window behavior for Filter Lines and Compare Against Disk.
-- Kept the application text-first and utility-focused rather than introducing toolbar, sidebar, or IDE-style chrome.
+- Introduced reusable modal-controller behavior for Keyboard Shortcuts and Document Inspector.
+- Unified Close, Escape, backdrop dismissal, focus restoration, and mutual exclusion behavior.
+- Made native menu checked and enabled state follow authoritative document context.
+- Expanded tests around read-only state, Follow File state, and command availability.
 
-## Dialogs, progress, and inspection
+## Recent Files and file opening
 
-- Modernized modal surfaces and overlay treatment.
-- Modernized large-file opening progress and cancellation presentation.
-- Modernized the keyboard-shortcuts reference.
-- Modernized Document Inspector while preserving its separation between saved-source and current-editor facts.
-- Unified semantic warning, error, Follow, read-only, large-file, and transient-status presentation.
+- Hardened Recent Files normalization.
+- Pruned missing entries, removed duplicates, preserved ordering, and retained the 10-entry cap.
+- Kept clearing Recent Files separate from last-document reopening state.
+- Routed drag-and-drop file opening through the normal guarded open-file pipeline.
+- Preserved dirty-buffer protection, Safe Open checks, large-file handling, and other existing open safeguards.
 
-## Preferences and defaults
+## Recovery and transient feedback
 
-- Reworked Preferences into a compact native-settings layout.
-- Improved Preferences behavior at narrow window sizes.
-- The bottom status bar is hidden by default.
-- Line numbers and the editor gutter are hidden by default.
-- Both settings remain persistent and user-toggleable.
+- Improved recovered-session presentation, including explicit recovered-document identification.
+- Expanded Document Inspector recovery/session reporting.
+- Strengthened startup behavior across explicit-file, recovery, scratchpad, last-document, missing-file, invalid-state, and save-cleanup cases.
+- Added transient feedback for operations that should remain visible even when the optional status bar is hidden.
+- Added concise feedback for path/filename copying, voluntary read-only changes, encoding changes, reload, revert, and blocked commands.
 
-## Theme architecture and accessibility
+## Security hardening
 
-- Consolidated shell styling around semantic V3 theme tokens.
-- Removed obsolete compatibility aliases left from the transition to the V3 theme system.
-- Centralized overlay styling and retained explicit Monaco syntax-theme palettes where appropriate.
-- Added `prefers-reduced-motion` handling for V3 transitions.
-- Preserved keyboard focus behavior and accessible labeling while applying the visual refresh.
-- Retained responsive status-bar behavior and added final small-window polish.
+- Centralized external web URL handling.
+- Restricted external navigation to HTTP and HTTPS URLs.
+- Denied popup navigation inside privileged renderer windows.
+- Prevented privileged renderer windows from navigating away from application content.
+- Added permanent security-contract tests for BrowserWindow hardening and navigation policy.
+- Preserved context isolation, disabled Node integration, renderer sandboxing, and narrow preload APIs.
+
+## Printing
+
+- Added configured-printer preflight before invoking Electron printing.
+- Added a clear error when no CUPS printer destinations are available.
+- Captured Electron print success and failure results instead of silently discarding them.
+- Treated user-cancelled print jobs separately from genuine print failures.
+- Preserved the hardened temporary BrowserWindow used for printing.
+- Added permanent print-contract tests and deterministic print behavior in accelerator runtime testing.
+
+## Validation and regression coverage
+
+- Added permanent command-registry contract tests.
+- Added permanent Electron security-contract tests.
+- Added permanent print-contract tests.
+- Added dedicated accelerator runtime coverage.
+- Expanded the main runtime suite for menus, modals, Recent Files, recovery, drag-and-drop, transient feedback, and interaction state.
+- Expanded startup coverage for recovery/session priority and cleanup.
+- Final V4 validation passed typechecking, unit tests, production build, runtime/startup tests, repeated accelerator execution, command contracts, security contracts, and print contracts.
 
 ## Preserved safety and architecture
 
-V3 does not weaken Monaco Notepad's existing file-safety or Electron security model. Atomic writes, read-only handling, symbolic-link-safe saves, executable-bit preservation, external-change conflict detection, Safe Open behavior, large-file safeguards, optional backup-on-save, context isolation, renderer sandboxing, and narrow preload APIs remain part of the application.
+V4 does not weaken Monaco Notepad's existing file-safety model. Atomic writes, read-only handling, symbolic-link-safe saves, executable-bit preservation, external-change conflict detection, Safe Open behavior, large-file safeguards, optional backup-on-save, encoding protection, mixed-EOL safeguards, and dirty-buffer protection remain part of the application.
 
 ## Platform and packaging
 
@@ -56,4 +73,4 @@ V3 does not weaken Monaco Notepad's existing file-safety or Electron security mo
 
 ## Scope
 
-Monaco Notepad remains a focused single-document text editor. V3 does not add tabs, workspaces, project trees, an embedded terminal, source-control UI, LSP features, IntelliSense, plugins, cloud accounts, telemetry, or other IDE architecture.
+Monaco Notepad remains a focused single-document text editor. V4 does not add tabs, workspaces, project trees, an embedded terminal, source-control UI, LSP features, IntelliSense, plugins, cloud accounts, telemetry, AI features, or other IDE architecture.

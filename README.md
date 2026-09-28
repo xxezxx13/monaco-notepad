@@ -6,20 +6,23 @@ A minimal, single-document Linux desktop text editor built with Electron, Monaco
 
 ## Version
 
-**Monaco Notepad v3**
+**Monaco Notepad v4**
 
-v3 is the current release of Monaco Notepad.
+v4 is the current release of Monaco Notepad.
 
-## What's new in v3
+## What's new in v4
 
-- Complete Graphite Utility visual refresh while preserving the focused Notepad-style workflow
-- Modernized editor shell, working panels, dialogs, progress surfaces, Document Inspector, and Preferences
-- Refined Graphite Dark and Clean Light themes with synchronized System-theme behavior
-- Unified semantic control, interaction, warning, error, Follow, read-only, and large-file state styling
-- Status bar and line-number gutter now hidden by default while remaining persistent and user-toggleable
-- Hardened semantic theme-token architecture with obsolete compatibility aliases removed
-- Improved narrow-window behavior for Filter Lines, Compare Against Disk, and Preferences
-- Added reduced-motion support and final responsive/accessibility polish
+- Centralized application commands and keyboard shortcuts in a canonical shared registry
+- Added deterministic runtime coverage for all 28 canonical shortcuts
+- Unified modal behavior for Keyboard Shortcuts and Document Inspector
+- Made native menu checked/enabled state follow authoritative document context
+- Hardened Recent Files normalization, missing-file pruning, deduplication, and clearing
+- Routed drag-and-drop opening through the same guarded Safe Open pipeline as normal file opening
+- Added Find Previous (`Shift+F3`) as a canonical, tested command
+- Improved recovery/session presentation and transient command feedback
+- Hardened privileged-window navigation and external URL handling
+- Improved Print behavior with configured-printer preflight and explicit failure reporting
+- Expanded permanent command, security, print, runtime, and startup regression coverage
 
 ## Features
 
