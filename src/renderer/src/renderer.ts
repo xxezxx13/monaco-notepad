@@ -558,7 +558,7 @@ if (!maybeModel) {
 
 const model = maybeModel
 const documentState = createDocumentState(model)
-let recoveredSession = false
+let restoredSession: 'none' | 'recovered-file' | 'scratchpad' = 'none'
 let recoveryTimer: number | null = null
 let statisticsTimer: number | null = null
 let documentGeneration = 0
@@ -1773,7 +1773,14 @@ function inspectorRowsForEditor(): Array<[string, string]> {
   return [
     ['Document', documentState.filePath ?? 'Untitled'],
     ['Dirty', isDocumentDirty(model, documentState) ? 'Yes' : 'No'],
-    ['Recovery', recoveredSession ? 'Recovered session' : 'None'],
+    [
+      'Recovery',
+      restoredSession === 'recovered-file'
+        ? 'Recovered session'
+        : restoredSession === 'scratchpad'
+          ? 'Persistent scratchpad'
+          : 'None'
+    ],
     ['Current encoding', inspectorEncodingLabel(documentState.encoding)],
     ['Saved encoding', inspectorEncodingLabel(documentState.savedEncoding)],
     ['Monaco model EOL', model.getEOL() === '\r\n' ? 'CRLF' : 'LF'],
@@ -2115,7 +2122,7 @@ function getDocumentName(): string {
 
 function updateTitle(): void {
   const dirty = isDocumentDirty(model, documentState)
-  const recovered = recoveredSession ? ' [Recovered]' : ''
+  const recovered = restoredSession === 'recovered-file' ? ' [Recovered]' : ''
   document.title = `${dirty ? '*' : ''}${getDocumentName()}${recovered} - Monaco Notepad`
 }
 
@@ -2338,7 +2345,7 @@ async function newDocument(): Promise<boolean> {
 
   documentGeneration++
   bookmarks.clear()
-  recoveredSession = false
+  restoredSession = 'none'
   model.setValue('')
   model.setEOL(
     defaultNewDocumentEol === 'CRLF'
@@ -2387,7 +2394,7 @@ async function loadDocument(
   documentGeneration++
   const loadGeneration = documentGeneration
   bookmarks.clear()
-  recoveredSession = false
+  restoredSession = 'none'
 
   // Put Monaco into its reduced-cost rendering posture before replacing a
   // large document so user preferences such as visible whitespace and
@@ -2612,10 +2619,12 @@ async function saveDocument(
   if (!documentState.languageOverride) {
     monaco.editor.setModelLanguage(model, languageForPath(filePath))
   }
+  if (restoredSession === 'scratchpad' && documentState.filePath) restoredSession = 'none'
+
   if (isDocumentDirty(model, documentState)) {
     scheduleRecovery()
   } else {
-    recoveredSession = false
+    restoredSession = 'none'
     await clearRecovery()
   }
 
@@ -3454,7 +3463,7 @@ runDocumentAction(async () => {
   if (recovery) {
     documentGeneration++
     bookmarks.clear()
-    recoveredSession = true
+    restoredSession = recovery.filePath === null ? 'scratchpad' : 'recovered-file'
     model.setValue(recovery.text)
     model.setEOL(
       recovery.eol === 'CRLF'

@@ -191,7 +191,7 @@ async function run() {
   const recoveredTitle = await evaluate(window, `document.title.includes('[Recovered]')`)
   assert.equal(
     recoveredTitle,
-    mode === 'recovery' || mode === 'scratchpad' || mode === 'save-cleanup',
+    mode === 'recovery' || mode === 'save-cleanup',
     `${mode} recovered-state title`
   )
 
