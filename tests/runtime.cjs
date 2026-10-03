@@ -1053,7 +1053,44 @@ async function run() {
   await evaluate(`document.getElementById('compare-keep').click()`)
   await until(`document.getElementById('compare-view').hidden`, 'close comparison')
   assert.equal(await evaluate('editor.getValue()'), 'current buffer')
-  console.log('PASS compare against disk preserves current buffer and disposes diff view')
+
+  const compareBaselineModelCount = await evaluate(`monaco.editor.getModels().length`)
+  assert.equal(await evaluate(`monaco.editor.getDiffEditors().length`), 0)
+
+  for (let cycle = 1; cycle <= 12; cycle++) {
+    const compareReplacement = path.join(temporary, `compare-resource-${cycle}.txt`)
+    const compareDiskText = cycle === 12 ? 'disk comparison' : `disk comparison ${cycle}`
+    await fs.writeFile(compareReplacement, compareDiskText)
+    response = 1
+    await fs.rename(compareReplacement, savePath)
+
+    await until(
+      `!document.getElementById('compare-view').hidden &&
+        monaco.editor.getDiffEditors().length === 1 &&
+        monaco.editor.getModels().length === ${compareBaselineModelCount + 1}`,
+      `compare resource cycle ${cycle} open`
+    )
+
+    assert.equal(
+      await evaluate(`monaco.editor.getDiffEditors()[0].getModel().modified.getValue()`),
+      compareDiskText
+    )
+
+    await evaluate(`document.getElementById('compare-keep').click()`)
+
+    await until(
+      `document.getElementById('compare-view').hidden &&
+        monaco.editor.getDiffEditors().length === 0 &&
+        monaco.editor.getModels().length === ${compareBaselineModelCount}`,
+      `compare resource cycle ${cycle} cleanup`
+    )
+
+    assert.equal(await evaluate('editor.getValue()'), 'current buffer')
+  }
+
+  console.log(
+    'PASS compare against disk preserves current buffer and returns Monaco resources to baseline'
+  )
   response = 2
   await fs.chmod(savePath, 0o444)
   await delay(600)
