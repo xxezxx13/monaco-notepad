@@ -854,6 +854,90 @@ async function run() {
   assert.equal(await fs.readFile(savePath, 'utf8'), 'backup-enabled save')
   assert.equal(await fs.readFile(`${savePath}.bak`, 'utf8'), preBackupSaveText)
 
+  const encodingSaveSample = 'café £ €'
+  const utf16LeBody = Buffer.from(encodingSaveSample, 'utf16le')
+  const utf16BeBody = Buffer.from(utf16LeBody)
+
+  for (let index = 0; index < utf16BeBody.length; index += 2) {
+    const low = utf16BeBody[index]
+    utf16BeBody[index] = utf16BeBody[index + 1]
+    utf16BeBody[index + 1] = low
+  }
+
+  const expectedEncodingBytes = new Map([
+    ['utf8', Buffer.from(encodingSaveSample, 'utf8')],
+    [
+      'utf8-bom',
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(encodingSaveSample, 'utf8')])
+    ],
+    ['utf16le', Buffer.concat([Buffer.from([0xff, 0xfe]), utf16LeBody])],
+    ['utf16be', Buffer.concat([Buffer.from([0xfe, 0xff]), utf16BeBody])],
+    ['windows1252', Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0xa3, 0x20, 0x80])]
+  ])
+
+  await setText(encodingSaveSample)
+
+  for (const [encoding, expectedBytes] of expectedEncodingBytes) {
+    await evaluate(`(() => {
+      const control = document.getElementById('encoding')
+      control.value = ${JSON.stringify(encoding)}
+      control.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await click('Save')
+    await until(`!document.title.startsWith('*')`, `${encoding} encoding save`)
+    assert.deepEqual(await fs.readFile(savePath), expectedBytes, encoding)
+  }
+
+  await evaluate(`(() => {
+    const control = document.getElementById('encoding')
+    control.value = 'utf8'
+    control.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await setText('Hello 世界')
+  await click('Save')
+  await until(`!document.title.startsWith('*')`, 'Unicode baseline save before ANSI rejection')
+  const unicodeBaselineBytes = await fs.readFile(savePath)
+  const saveErrorsBeforeAnsiRejection = messages.filter(
+    (message) => message.title === 'Save Error'
+  ).length
+
+  await evaluate(`(() => {
+    const control = document.getElementById('encoding')
+    control.value = 'windows1252'
+    control.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await click('Save')
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (
+      messages.filter((message) => message.title === 'Save Error').length >
+      saveErrorsBeforeAnsiRejection
+    ) {
+      break
+    }
+    await delay(50)
+  }
+  assert.ok(
+    messages.filter((message) => message.title === 'Save Error').length >
+      saveErrorsBeforeAnsiRejection
+  )
+  const ansiSaveError = [...messages].reverse().find((message) => message.title === 'Save Error')
+  assert.match(ansiSaveError?.detail ?? '', /cannot be represented/)
+  assert.deepEqual(await fs.readFile(savePath), unicodeBaselineBytes)
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+  assert.equal(await evaluate(`document.getElementById('encoding').value`), 'windows1252')
+
+  await evaluate(`(() => {
+    const control = document.getElementById('encoding')
+    control.value = 'utf8'
+    control.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await until(`!document.title.startsWith('*')`, 'restore saved UTF-8 after ANSI rejection')
+  await setText('backup-enabled save')
+  await click('Save')
+  await until(`!document.title.startsWith('*')`, 'encoding matrix state restore')
+  assert.equal(await fs.readFile(savePath, 'utf8'), 'backup-enabled save')
+  console.log('PASS exact save bytes for all encodings and lossless ANSI rejection')
+
   const statusBarDisplayBeforeNotificationTest = await evaluate(
     `document.getElementById('statusbar').style.display`
   )
