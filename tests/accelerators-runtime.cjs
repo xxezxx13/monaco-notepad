@@ -411,17 +411,42 @@ async function run() {
   )
 
   await pressShortcut('find-next')
-  await until(`editor.getSelection().startColumn > 1`, 'F3 Find Next')
-  const findNextStartColumn = await evaluate(`editor.getSelection().startColumn`)
+  await until(`editor.getSelection().startColumn === 12`, 'F3 Find Next to second match')
+
+  await pressShortcut('find-next')
+  await until(`editor.getSelection().startColumn === 1`, 'F3 Find Next wraps to first match')
 
   await pressShortcut('find-previous')
   await until(
-    `editor.getSelection().startColumn < ${findNextStartColumn}`,
-    'Shift+F3 Find Previous'
+    `editor.getSelection().startColumn === 12`,
+    'Shift+F3 Find Previous wraps to last match'
+  )
+
+  await pressShortcut('find-previous')
+  await until(
+    `editor.getSelection().startColumn === 1`,
+    'Shift+F3 Find Previous returns to first match'
   )
 
   await press('Escape')
-  await delay(100)
+  await until(
+    `document.querySelector('.find-widget')?.classList.contains('visible') === false`,
+    'Find widget closes'
+  )
+
+  await evaluate(`editor.focus()`)
+
+  await pressShortcut('find-next')
+  await until(
+    `editor.getSelection().startColumn === 12`,
+    'F3 Find Next advances with widget closed'
+  )
+
+  await pressShortcut('find-previous')
+  await until(
+    `editor.getSelection().startColumn === 1`,
+    'Shift+F3 Find Previous advances with widget closed'
+  )
 
   await evaluate(`editor.focus()`)
   await pressShortcut('replace')
@@ -440,12 +465,23 @@ async function run() {
   await press('Escape')
   await delay(100)
 
-  await evaluate(`editor.focus()`)
+  await setText('line one\nline two\nline three\nline four')
+  await evaluate(`editor.setPosition({ lineNumber: 1, column: 1 }); editor.focus()`)
+
   await pressShortcut('go-to')
   await until(`document.activeElement?.closest('.quick-input-widget') !== null`, 'Ctrl+G Go To')
 
-  await press('Escape')
-  await delay(100)
+  assert.equal(await evaluate(`document.activeElement?.value ?? null`), ':', 'Ctrl+G Go To prefix')
+
+  await window.webContents.insertText('3')
+
+  await until(`document.activeElement?.value === ':3'`, 'Ctrl+G Go To line input')
+
+  await press('Enter')
+
+  await until(`editor.getPosition().lineNumber === 3`, 'Ctrl+G Go To line 3')
+
+  await until(`editor.hasTextFocus()`, 'Ctrl+G Go To editor focus restore')
 
   // -------------------------------------------------------------------
   // Bookmark accelerators.
