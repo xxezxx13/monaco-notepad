@@ -596,6 +596,16 @@ let inspectorDiskSnapshot: InspectorDiskSnapshot | null = null
 let inspectorDiskError: string | null = null
 const bookmarks = editor.createDecorationsCollection()
 
+function applyStatusBarVisibility(visible: boolean): void {
+  statusBar.style.display = visible ? '' : 'none'
+
+  const statusBarHeight = visible ? statusBar.getBoundingClientRect().height : 0
+
+  transientStatus.style.setProperty('--transient-status-bottom-offset', `${statusBarHeight}px`)
+
+  editor.layout()
+}
+
 function showTransientStatus(message: string, error = false): void {
   if (transientStatusTimer !== null) window.clearTimeout(transientStatusTimer)
   transientStatus.textContent = message
@@ -2959,8 +2969,7 @@ window.api.onCloseRequested(() => {
 
 window.api.onStatusBar((visible) => {
   statusBarPreference = visible
-  statusBar.style.display = visible ? '' : 'none'
-  editor.layout()
+  applyStatusBarVisibility(visible)
 })
 
 window.api.onWordWrap((enabled) => {
@@ -2978,8 +2987,7 @@ window.api.onShowWhitespace(setShowWhitespace)
 window.api.onShowLineNumbers(setShowLineNumbers)
 window.api.onEditorPreferences(applyEditorPreferences)
 window.api.onFullScreen((enabled) => {
-  statusBar.style.display = enabled || !statusBarPreference ? 'none' : ''
-  editor.layout()
+  applyStatusBarVisibility(!enabled && statusBarPreference)
 })
 
 window.api.onMenuCommand((command) => {
@@ -3351,8 +3359,7 @@ void window.api.preferences.getAll().then((preferences) => {
     wordWrap: wordWrapPreference ? 'on' : 'off'
   })
   statusBarPreference = preferences.statusBarVisible
-  statusBar.style.display = preferences.statusBarVisible ? '' : 'none'
-  editor.layout()
+  applyStatusBarVisibility(preferences.statusBarVisible)
   applyEditorPreferences({
     trimTrailingWhitespaceOnSave: preferences.trimTrailingWhitespaceOnSave,
     autoIndent: preferences.autoIndent,
@@ -3402,8 +3409,7 @@ window.api.onPreferencesChanged((changes) => {
   }
   if (changes.statusBarVisible !== undefined) {
     statusBarPreference = changes.statusBarVisible
-    statusBar.style.display = changes.statusBarVisible ? '' : 'none'
-    editor.layout()
+    applyStatusBarVisibility(changes.statusBarVisible)
   }
   if (
     changes.trimTrailingWhitespaceOnSave !== undefined ||

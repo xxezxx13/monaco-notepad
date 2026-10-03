@@ -1147,7 +1147,7 @@ body {
 #transient-status {
   position: fixed;
   right: 12px;
-  bottom: 12px;
+  bottom: calc(12px + var(--transient-status-bottom-offset, 0px));
   z-index: 30;
   display: flex;
   align-items: center;

@@ -857,7 +857,14 @@ async function run() {
   const statusBarDisplayBeforeNotificationTest = await evaluate(
     `document.getElementById('statusbar').style.display`
   )
-  await evaluate(`document.getElementById('statusbar').style.display = 'none'`)
+
+  if (statusBarDisplayBeforeNotificationTest === 'none') {
+    await click('Status Bar')
+    await until(
+      `document.getElementById('statusbar').style.display !== 'none'`,
+      'status bar visible for transient positioning'
+    )
+  }
 
   await click('Copy Full Path')
   await until(
@@ -870,11 +877,21 @@ async function run() {
     await evaluate(`document.getElementById('transient-status').parentElement?.id === 'statusbar'`),
     false
   )
-  assert.notEqual(
-    await evaluate(`getComputedStyle(document.getElementById('transient-status')).display`),
-    'none'
+  assert.equal(
+    await evaluate(`(() => {
+      const transient = document.getElementById('transient-status').getBoundingClientRect()
+      const statusbar = document.getElementById('statusbar').getBoundingClientRect()
+      return transient.bottom <= statusbar.top
+    })()`),
+    true,
+    'transient feedback must sit above the visible status bar'
   )
-  assert.equal(await evaluate(`document.getElementById('statusbar').style.display`), 'none')
+
+  await click('Status Bar')
+  await until(
+    `document.getElementById('statusbar').style.display === 'none'`,
+    'status bar hidden for transient feedback'
+  )
 
   await click('Copy Filename')
   await until(
@@ -883,11 +900,22 @@ async function run() {
     'Filename copied transient feedback'
   )
   assert.equal(clipboard.readText(), path.basename(savePath))
-
-  await evaluate(
-    `document.getElementById('statusbar').style.display =
-      ${JSON.stringify(statusBarDisplayBeforeNotificationTest)}`
+  assert.notEqual(
+    await evaluate(`getComputedStyle(document.getElementById('transient-status')).display`),
+    'none'
   )
+  assert.equal(
+    await evaluate(`getComputedStyle(document.getElementById('transient-status')).bottom`),
+    '12px'
+  )
+
+  if (statusBarDisplayBeforeNotificationTest !== 'none') {
+    await click('Status Bar')
+    await until(
+      `document.getElementById('statusbar').style.display !== 'none'`,
+      'restore visible status bar after transient test'
+    )
+  }
   await click('Reveal in File Manager')
   assert.deepEqual(revealedFiles, [savePath])
   await click('Open Terminal Here')
