@@ -29,7 +29,13 @@ import {
   type OpenFileReadOptions,
   type SaveFileRequest
 } from './files'
-import { createSaveBaselineTracker, fileSignature, type ConflictChoice } from './conflict'
+import {
+  classifyFileChange,
+  createSaveBaselineTracker,
+  fileSignature,
+  type ConflictChoice,
+  type ExternalFileChangeKind
+} from './conflict'
 import { FollowReader } from './follow'
 import { portalThemeFromOutput, type PortalTheme } from './portal'
 import { selectionDigests, type SelectionHashAlgorithm } from './selection-hash'
@@ -339,14 +345,17 @@ function checkWatchedFile(window: BrowserWindow): void {
     return
   }
 
+  const previousSignature = watchedFileSignature
   const signature = fileSignature(watchedFilePath)
-  if (signature === watchedFileSignature) return
+  if (signature === previousSignature) return
 
   externalChangePending = true
   pendingFileSignature = signature
   window.webContents.send('file:external-change', {
     filePath: watchedFilePath,
-    exists: signature !== null
+    exists: signature !== null,
+    kind: classifyFileChange(previousSignature, signature),
+    signature
   })
 }
 
@@ -1029,10 +1038,10 @@ app.whenReady().then(() => {
     'file:save',
     async (
       event,
-      request: SaveFileRequest & { baselineCheck?: boolean }
+      request: SaveFileRequest & { baselineCheck?: boolean; expectedSignature?: string | null }
     ): Promise<
       | { action: 'saved'; filePath: string }
-      | { action: 'conflict' }
+      | { action: 'conflict'; signature: string | null }
       | { action: 'cancelled' }
       | { action: 'error'; message: string }
     > => {
@@ -1043,11 +1052,22 @@ app.whenReady().then(() => {
       }
 
       if (
-        request.baselineCheck !== false &&
         request.filePath &&
+        request.baselineCheck !== false &&
         saveBaseline.check(request.filePath)
       ) {
-        return { action: 'conflict' }
+        return { action: 'conflict', signature: fileSignature(request.filePath) }
+      }
+
+      if (
+        request.filePath &&
+        request.baselineCheck === false &&
+        request.expectedSignature !== undefined
+      ) {
+        const currentSignature = fileSignature(request.filePath)
+        if (currentSignature !== request.expectedSignature) {
+          return { action: 'conflict', signature: currentSignature }
+        }
       }
 
       savesInProgress++
@@ -1088,6 +1108,20 @@ app.whenReady().then(() => {
     async (event, { filePath }: { filePath: string }): Promise<ConflictChoice> => {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) throw new Error('Unable to resolve application window')
+
+      if (fileSignature(filePath) === null) {
+        const result = await dialog.showMessageBox(window, {
+          type: 'warning',
+          title: 'File Removed',
+          message: `${basename(filePath)} no longer exists on disk.`,
+          detail: 'Save As preserves your editor contents without recreating the removed path.',
+          buttons: ['Save As', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true
+        })
+        return result.response === 0 ? 'save-as' : 'cancel'
+      }
 
       const result = await dialog.showMessageBox(window, {
         type: 'warning',
@@ -1392,32 +1426,72 @@ app.whenReady().then(() => {
     'file:confirm-external-change',
     async (
       event,
-      change: { filePath: string; exists: boolean; dirty: boolean; largeFileMode: boolean }
-    ) => {
+      change: {
+        filePath: string
+        exists: boolean
+        kind: ExternalFileChangeKind
+        signature: string | null
+        dirty: boolean
+        largeFileMode: boolean
+      }
+    ): Promise<'reload' | 'keep' | 'compare' | 'save-as' | 'overwrite'> => {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) throw new Error('Unable to resolve application window')
 
-      if (!change.exists) {
-        await dialog.showMessageBox(window, {
+      if (change.kind === 'deleted' || !change.exists) {
+        const result = await dialog.showMessageBox(window, {
           type: 'warning',
           title: 'File Removed',
           message: 'The current file was deleted or moved by another program.',
-          detail: 'Your text remains open. Use Save As to preserve it at a new location.',
-          buttons: ['Keep Current']
+          detail:
+            'Your text remains open. Save As preserves it without recreating the removed path.',
+          buttons: ['Save As', 'Keep Editing'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true
         })
-        return 'keep'
+        return result.response === 0 ? 'save-as' : 'keep'
       }
 
+      const replaced = change.kind === 'replaced'
+      const title = replaced ? 'File Replaced' : 'File Changed'
+      const message = replaced
+        ? 'The file at the current path was replaced by another file.'
+        : 'The current file changed on disk.'
       const compareUnavailable = change.largeFileMode
         ? ' Compare is unavailable while Large File Mode is active.'
         : ''
+
+      if (change.dirty) {
+        const buttons = change.largeFileMode
+          ? ['Keep Editing', 'Save As', 'Overwrite']
+          : ['Keep Editing', 'Compare Against Disk', 'Save As', 'Overwrite']
+        const result = await dialog.showMessageBox(window, {
+          type: 'warning',
+          title,
+          message,
+          detail:
+            'Your editor has unsaved changes. Overwrite replaces the current disk version with your editor contents.' +
+            compareUnavailable,
+          buttons,
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        })
+
+        if (result.response === 0) return 'keep'
+        if (!change.largeFileMode && result.response === 1) return 'compare'
+        const saveAsIndex = change.largeFileMode ? 1 : 2
+        return result.response === saveAsIndex ? 'save-as' : 'overwrite'
+      }
+
       const result = await dialog.showMessageBox(window, {
         type: 'warning',
-        title: 'File Changed',
-        message: 'The current file changed on disk.',
+        title,
+        message,
         detail:
-          (change.dirty
-            ? 'Reloading will discard your unsaved changes.'
+          (replaced
+            ? 'Reload the replacement now?'
             : 'Reload the version saved by the other program?') + compareUnavailable,
         buttons: change.largeFileMode
           ? ['Reload', 'Keep Current']

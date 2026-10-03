@@ -2,12 +2,30 @@ import { resolve } from 'node:path'
 import { statSync } from 'node:fs'
 
 export type ConflictChoice = 'reload' | 'overwrite' | 'save-as' | 'cancel'
+export type ExternalFileChangeKind = 'modified' | 'replaced' | 'deleted'
 
 export interface SaveBaselineTracker {
   record(filePath: string | null): void
   recordSignature(filePath: string, signature: string): void
   check(filePath: string): boolean
   currentPath(): string | null
+}
+
+function signatureIdentity(signature: string | null): string | null {
+  if (signature === null) return null
+  const [device, inode] = signature.split(':')
+  return device !== undefined && inode !== undefined ? `${device}:${inode}` : signature
+}
+
+export function classifyFileChange(
+  previousSignature: string | null,
+  currentSignature: string | null
+): ExternalFileChangeKind {
+  if (currentSignature === null) return 'deleted'
+  if (previousSignature === null) return 'replaced'
+  return signatureIdentity(previousSignature) === signatureIdentity(currentSignature)
+    ? 'modified'
+    : 'replaced'
 }
 
 export function fileSignature(filePath: string): string | null {
@@ -35,7 +53,7 @@ export function createSaveBaselineTracker(): SaveBaselineTracker {
     check(filePath: string): boolean {
       if (resolve(filePath) !== baselinePath) return false
       const current = fileSignature(filePath)
-      return current !== null && current !== baselineSignature
+      return current !== baselineSignature
     },
     currentPath(): string | null {
       return baselinePath

@@ -1008,24 +1008,21 @@ async function run() {
   console.log(
     'PASS file utilities, checksum, save copy, reload, guarded revert, and transient feedback'
   )
-  const fileChangeMessagesBeforeSelfSave = messages.filter((m) => m.title === 'File Changed').length
+  const externalChangeMessageCount = () =>
+    messages.filter((m) => ['File Changed', 'File Replaced', 'File Removed'].includes(m.title))
+      .length
+  const fileChangeMessagesBeforeSelfSave = externalChangeMessageCount()
   await setText('saved again')
   await click('Save')
   await delay(400)
   assert.equal(await fs.readFile(savePath, 'utf8'), 'saved again')
-  assert.equal(
-    messages.filter((m) => m.title === 'File Changed').length,
-    fileChangeMessagesBeforeSelfSave
-  )
+  assert.equal(externalChangeMessageCount(), fileChangeMessagesBeforeSelfSave)
   const replacement = path.join(temporary, 'replacement.txt')
   await fs.writeFile(replacement, 'external replacement')
   response = 0
   await fs.rename(replacement, savePath)
   await until(`editor.getValue() === 'external replacement'`, 'atomic external reload')
-  assert.equal(
-    messages.filter((m) => m.title === 'File Changed').length,
-    fileChangeMessagesBeforeSelfSave + 1
-  )
+  assert.equal(externalChangeMessageCount(), fileChangeMessagesBeforeSelfSave + 1)
   await fs.writeFile(replacement, 'second replacement')
   await fs.rename(replacement, savePath)
   await until(`editor.getValue() === 'second replacement'`, 'watch survives replacement')
@@ -1091,7 +1088,70 @@ async function run() {
   console.log(
     'PASS compare against disk preserves current buffer and returns Monaco resources to baseline'
   )
+
+  const overwriteReplacement = path.join(temporary, 'external-overwrite-target.txt')
+  await fs.writeFile(overwriteReplacement, 'external overwrite target')
+  response = 3
+  await fs.rename(overwriteReplacement, savePath)
+  await until(`!document.title.startsWith('*')`, 'explicit external overwrite')
+  assert.equal(await fs.readFile(savePath, 'utf8'), 'current buffer')
+  const overwritePrompt = [...messages]
+    .reverse()
+    .find((message) => message.title === 'File Replaced')
+  assert.deepEqual(overwritePrompt?.buttons, [
+    'Keep Editing',
+    'Compare Against Disk',
+    'Save As',
+    'Overwrite'
+  ])
+  console.log('PASS dirty external replacement exposes explicit overwrite')
+
+  await setText('deleted path edits')
+  const deletedPath = savePath
+  const removedPromptsBefore = messages.filter((message) => message.title === 'File Removed').length
+  response = 1
+  await fs.rm(deletedPath)
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (
+      messages.filter((message) => message.title === 'File Removed').length > removedPromptsBefore
+    )
+      break
+    await delay(50)
+  }
+  const removalPrompt = [...messages].reverse().find((message) => message.title === 'File Removed')
+  assert.deepEqual(removalPrompt?.buttons, ['Save As', 'Keep Editing'])
+  await assert.rejects(fs.access(deletedPath))
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+
+  const removedPromptsBeforeSave = messages.filter(
+    (message) => message.title === 'File Removed'
+  ).length
+  response = 1
+  await click('Save')
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (
+      messages.filter((message) => message.title === 'File Removed').length >
+      removedPromptsBeforeSave
+    )
+      break
+    await delay(50)
+  }
+  await assert.rejects(fs.access(deletedPath))
+  assert.equal(await evaluate(`document.title.startsWith('*')`), true)
+  const deletedSavePrompt = [...messages]
+    .reverse()
+    .find((message) => message.title === 'File Removed')
+  assert.deepEqual(deletedSavePrompt?.buttons, ['Save As', 'Cancel'])
+
+  savePath = path.join(temporary, 'after-deletion.txt')
+  await click('Save As...')
+  await until(`!document.title.startsWith('*')`, 'deleted file Save As recovery')
+  assert.equal(await fs.readFile(savePath, 'utf8'), 'deleted path edits')
+  await assert.rejects(fs.access(deletedPath))
+  console.log('PASS deletion keeps buffer safe and ordinary Save cannot silently recreate old path')
+
   response = 2
+  const readOnlyDiskText = await fs.readFile(savePath, 'utf8')
   await fs.chmod(savePath, 0o444)
   await delay(600)
   await evaluate(`window.dispatchEvent(new Event('focus'))`)
@@ -1107,7 +1167,7 @@ async function run() {
 
   await setText('read only edits')
   await click('Save')
-  assert.equal(await fs.readFile(savePath, 'utf8'), 'disk comparison')
+  assert.equal(await fs.readFile(savePath, 'utf8'), readOnlyDiskText)
   assert.equal(await evaluate(`document.title.startsWith('*')`), true)
   assert.ok(messages.some((m) => m.title === 'Save Error'))
   savePath = path.join(temporary, 'writable-copy.txt')

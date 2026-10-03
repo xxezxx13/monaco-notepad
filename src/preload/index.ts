@@ -67,17 +67,23 @@ type SaveFileRequest = {
   text: string
   encoding: FileEncoding
   baselineCheck?: boolean
+  expectedSignature?: string | null
   protectedPath?: string | null
 }
 
 type SaveFileResult =
   | { action: 'saved'; filePath: string }
-  | { action: 'conflict' }
+  | { action: 'conflict'; signature: string | null }
   | { action: 'cancelled' }
   | { action: 'error'; message: string }
 
 type UnsavedChoice = 'save' | 'discard' | 'cancel'
-type ExternalFileChange = { filePath: string; exists: boolean }
+type ExternalFileChange = {
+  filePath: string
+  exists: boolean
+  kind: 'modified' | 'replaced' | 'deleted'
+  signature: string | null
+}
 type FollowUpdate =
   | { kind: 'append'; text: string; from: number; to: number }
   | {
@@ -211,7 +217,7 @@ const api = {
 
   confirmExternalFileChange: (
     change: ExternalFileChange & { dirty: boolean; largeFileMode: boolean }
-  ): Promise<'reload' | 'keep' | 'compare'> =>
+  ): Promise<'reload' | 'keep' | 'compare' | 'save-as' | 'overwrite'> =>
     ipcRenderer.invoke('file:confirm-external-change', change),
 
   externalFileChangeHandled: (): Promise<void> =>

@@ -2538,7 +2538,10 @@ async function reopenWithEncoding(encoding: typeof documentState.encoding): Prom
   })
 }
 
-async function saveDocument(saveAs = false, overwrite = false): Promise<boolean> {
+async function saveDocument(
+  saveAs = false,
+  overwriteExpectedSignature?: string | null
+): Promise<boolean> {
   if (documentState.forcedReadOnly && !saveAs) {
     showTransientStatus('Safe Open: use Save As to save a text copy', true)
     return false
@@ -2564,7 +2567,8 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
     filePath: saveAs ? null : documentState.filePath,
     text: savedText,
     encoding: savedEncoding,
-    baselineCheck: !overwrite,
+    baselineCheck: overwriteExpectedSignature === undefined,
+    expectedSignature: overwriteExpectedSignature,
     protectedPath: documentState.protectedPath
   })
 
@@ -2574,7 +2578,7 @@ async function saveDocument(saveAs = false, overwrite = false): Promise<boolean>
       return reloadFromDisk('reload')
     }
     if (choice === 'overwrite') {
-      return saveDocument(false, true)
+      return saveDocument(false, result.signature)
     }
     if (choice === 'save-as') {
       return saveDocumentAs()
@@ -2908,6 +2912,16 @@ window.api.onExternalFileChange((change) => {
 
       if (choice === 'compare') {
         if (!documentState.largeFileMode) await openCompare(change.filePath)
+        return
+      }
+
+      if (choice === 'save-as') {
+        await saveDocumentAs()
+        return
+      }
+
+      if (choice === 'overwrite') {
+        if (change.signature !== null) await saveDocument(false, change.signature)
         return
       }
 

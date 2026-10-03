@@ -25,7 +25,7 @@ vm.runInNewContext(compiled, {
   }
 })
 
-const { createSaveBaselineTracker, fileSignature } = module.exports
+const { classifyFileChange, createSaveBaselineTracker, fileSignature } = module.exports
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- Test helper.
 async function temporaryDirectory(t) {
@@ -53,6 +53,13 @@ test('fileSignature returns null for missing file', async (t) => {
   assert.equal(signature, null)
 })
 
+test('file change classification distinguishes modification, replacement, and deletion', () => {
+  assert.equal(classifyFileChange('1:2:100:5', '1:2:200:6'), 'modified')
+  assert.equal(classifyFileChange('1:2:100:5', '1:9:200:6'), 'replaced')
+  assert.equal(classifyFileChange(null, '1:9:200:6'), 'replaced')
+  assert.equal(classifyFileChange('1:2:100:5', null), 'deleted')
+})
+
 test('unchanged file passes baseline check', async (t) => {
   const directory = await temporaryDirectory(t)
   const tracker = createSaveBaselineTracker()
@@ -72,6 +79,18 @@ test('externally modified file fails baseline check', async (t) => {
   tracker.record(file)
   await new Promise((resolve) => setTimeout(resolve, 20))
   await writeFile(file, 'external edit')
+
+  assert.equal(tracker.check(file), true)
+})
+
+test('deleted file fails baseline check', async (t) => {
+  const directory = await temporaryDirectory(t)
+  const tracker = createSaveBaselineTracker()
+  const file = join(directory, 'deleted.txt')
+  await writeFile(file, 'original')
+
+  tracker.record(file)
+  await import('node:fs/promises').then(({ rm }) => rm(file))
 
   assert.equal(tracker.check(file), true)
 })
