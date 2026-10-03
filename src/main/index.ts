@@ -10,7 +10,7 @@ import {
 } from 'electron'
 import { isAbsolute, join, resolve } from 'path'
 import { basename, dirname } from 'node:path'
-import { realpathSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { appendFileSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { readFile, unlink, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -62,6 +62,41 @@ let portalMonitor: ReturnType<typeof spawn> | null = null
 let followReader: FollowReader | null = null
 let followPoll: Promise<void> = Promise.resolve()
 const activeOpenRequests = new Map<number, Map<string, AbortController>>()
+const startupTracePath = process.env.MONACO_NOTEPAD_STARTUP_TRACE?.trim() || null
+const startupTraceStartedAt = process.hrtime.bigint()
+const startupTraceRunId = `${process.pid}-${Date.now().toString(36)}`
+
+function traceStartup(event: string, detail: Record<string, unknown> = {}): void {
+  if (!startupTracePath) return
+
+  try {
+    appendFileSync(
+      startupTracePath,
+      `${JSON.stringify({
+        runId: startupTraceRunId,
+        pid: process.pid,
+        elapsedMs: Number(process.hrtime.bigint() - startupTraceStartedAt) / 1_000_000,
+        event,
+        ...detail
+      })}\n`,
+      'utf8'
+    )
+  } catch {
+    // Startup diagnostics must never interfere with application startup.
+  }
+}
+
+traceStartup('process-entry', {
+  packaged: app.isPackaged,
+  platform: process.platform,
+  flatpak: Boolean(process.env.FLATPAK_ID),
+  sessionType: process.env.XDG_SESSION_TYPE ?? null,
+  wayland: Boolean(process.env.WAYLAND_DISPLAY),
+  appVersion: app.getVersion(),
+  electronVersion: process.versions.electron ?? null,
+  chromiumVersion: process.versions.chrome ?? null,
+  nodeVersion: process.versions.node
+})
 
 function beginOpenRequest(
   event: IpcMainInvokeEvent,
@@ -405,18 +440,26 @@ function requestFileOpen(filePath: string): void {
   }
 }
 
+traceStartup('single-instance-lock-attempt')
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
+traceStartup('single-instance-lock-result', { acquired: hasSingleInstanceLock })
 
 // Let Chromium choose Wayland when it is available, while retaining X11/XWayland fallback.
 if (process.platform === 'linux') app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
 
 if (!hasSingleInstanceLock) {
+  traceStartup('single-instance-lock-denied')
   app.quit()
 } else {
   pendingFilePath = filePathFromArguments(process.argv)
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
     const filePath = filePathFromArguments(argv, workingDirectory)
+    traceStartup('second-instance', {
+      hasFilePath: Boolean(filePath),
+      windowExists: Boolean(mainWindow),
+      rendererReady
+    })
     if (filePath) requestFileOpen(filePath)
     else if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
@@ -495,6 +538,8 @@ function createPreferencesWindow(): void {
 }
 
 function createWindow(): void {
+  traceStartup('window-construction-begin')
+
   // Create the browser window.
   rendererReady = false
   mainWindow = new BrowserWindow({
@@ -515,9 +560,42 @@ function createWindow(): void {
       spellcheck: false
     }
   })
+  traceStartup('window-construction-end', { webContentsId: mainWindow.webContents.id })
 
   mainWindow.on('ready-to-show', () => {
+    traceStartup('ready-to-show')
+    traceStartup('show-requested', { reason: 'ready-to-show' })
     mainWindow?.show()
+  })
+
+  mainWindow.on('show', () => {
+    traceStartup('window-show', { visible: mainWindow?.isVisible() ?? false })
+  })
+
+  mainWindow.on('unresponsive', () => {
+    traceStartup('window-unresponsive')
+  })
+
+  mainWindow.webContents.on('did-start-loading', () => {
+    traceStartup('load-started')
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    traceStartup('load-finished')
+  })
+
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+      traceStartup('load-failed', { errorCode, errorDescription, isMainFrame })
+    }
+  )
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    traceStartup('render-process-gone', {
+      reason: details.reason,
+      exitCode: details.exitCode
+    })
   })
 
   mainWindow.on('focus', () => {
@@ -543,6 +621,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    traceStartup('window-closed')
     stopWatchingFile()
     rendererReady = false
     mainWindow = null
@@ -574,8 +653,10 @@ function createWindow(): void {
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    traceStartup('load-begin', { source: 'development' })
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
+    traceStartup('load-begin', { source: 'packaged' })
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
@@ -583,10 +664,15 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+app.once('before-quit', () => traceStartup('before-quit'))
+app.once('will-quit', () => traceStartup('will-quit'))
 app.once('will-quit', stopPortalThemeMonitor)
+process.once('exit', () => traceStartup('process-exit'))
 process.once('exit', stopPortalThemeMonitor)
+app.once('ready', () => traceStartup('app-ready'))
 
 app.whenReady().then(() => {
+  traceStartup('when-ready-resolved')
   if (!hasSingleInstanceLock) return
 
   nativeTheme.themeSource = preferences.get('theme')
@@ -741,7 +827,17 @@ app.whenReady().then(() => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
 
+    traceStartup('renderer-ready-ipc', {
+      recoveryRestored,
+      pendingFile: Boolean(pendingFilePath),
+      windowVisible: window.isVisible()
+    })
     rendererReady = true
+
+    if (!window.isVisible()) {
+      traceStartup('show-requested', { reason: 'renderer-ready-fallback' })
+      window.show()
+    }
     if (pendingFilePath) {
       const filePath = pendingFilePath
       pendingFilePath = null

@@ -9,6 +9,19 @@ const os = require('node:os')
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const mode = process.argv[2]
 let server
+let suppressedReadyToShow = 0
+const originalBrowserWindowOn = BrowserWindow.prototype.on
+
+if (mode === 'visibility-fallback') {
+  BrowserWindow.prototype.on = function (event, listener) {
+    if (event === 'ready-to-show') {
+      suppressedReadyToShow++
+      return this
+    }
+
+    return originalBrowserWindowOn.call(this, event, listener)
+  }
+}
 
 async function evaluate(window, code) {
   return window.webContents.executeJavaScript(code, true)
@@ -24,9 +37,16 @@ async function until(window, code, description) {
 
 async function run() {
   assert.ok(
-    ['explicit', 'recovery', 'scratchpad', 'last', 'missing', 'invalid', 'save-cleanup'].includes(
-      mode
-    ),
+    [
+      'explicit',
+      'recovery',
+      'scratchpad',
+      'last',
+      'missing',
+      'invalid',
+      'save-cleanup',
+      'visibility-fallback'
+    ].includes(mode),
     `Unknown mode: ${mode}`
   )
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'monaco-notepad-startup-'))
@@ -133,6 +153,20 @@ async function run() {
     })()`
   )
 
+  if (mode === 'visibility-fallback') {
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (window?.isVisible()) break
+      await delay(50)
+    }
+
+    assert.equal(suppressedReadyToShow, 1, 'visibility regression must suppress ready-to-show')
+    assert.equal(
+      window?.isVisible(),
+      true,
+      'renderer-ready fallback must show a window when ready-to-show is unavailable'
+    )
+  }
+
   const expected =
     mode === 'explicit'
       ? 'explicit document'
@@ -142,7 +176,7 @@ async function run() {
           ? 'persistent scratchpad'
           : mode === 'save-cleanup'
             ? 'recovered save document'
-            : mode === 'last' || mode === 'invalid'
+            : mode === 'last' || mode === 'invalid' || mode === 'visibility-fallback'
               ? 'last document'
               : ''
   await until(
