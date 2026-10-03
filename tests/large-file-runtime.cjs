@@ -117,8 +117,26 @@ async function run() {
       !document.getElementById('open-progress-cancel').disabled`,
     'large-file read progress'
   )
-  await evaluate(`document.getElementById('open-progress-cancel').click()`)
+  const cancellationFocus = await evaluate(`(() => {
+    const dialog = document.getElementById('open-progress-dialog')
+    const cancel = document.getElementById('open-progress-cancel')
+    const before = document.activeElement?.id ?? ''
+    cancel.click()
+    return {
+      before,
+      after: document.activeElement?.id ?? '',
+      cancelDisabled: cancel.disabled,
+      dialogHidden: dialog.hidden
+    }
+  })()`)
+  assert.deepEqual(cancellationFocus, {
+    before: 'open-progress-cancel',
+    after: 'open-progress-dialog',
+    cancelDisabled: true,
+    dialogHidden: false
+  })
   await until(`document.getElementById('open-progress-dialog').hidden`, 'large-file cancellation')
+  assert.equal(await evaluate(`editor.hasTextFocus()`), true)
   assert.equal(await evaluate(`editor.getValue()`), '')
   assert.equal(await evaluate(`document.title`), 'Untitled - Monaco Notepad')
 

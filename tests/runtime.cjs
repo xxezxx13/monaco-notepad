@@ -449,6 +449,10 @@ async function run() {
   assert.equal(await inspectorValue('document-inspector-editor', 'Current encoding'), 'UTF-8')
   assert.equal(await inspectorValue('document-inspector-editor', 'Saved encoding'), 'UTF-8')
   assert.equal(await evaluate(`document.activeElement?.id`), 'document-inspector-refresh')
+  await press('Tab', ['shift'])
+  assert.equal(await evaluate(`document.activeElement?.id`), 'document-inspector-close')
+  await press('Tab')
+  assert.equal(await evaluate(`document.activeElement?.id`), 'document-inspector-refresh')
   await evaluate(`document.getElementById('document-inspector-close').click()`)
   await until(
     `document.getElementById('document-inspector-dialog').hidden && editor.hasTextFocus()`,
@@ -644,6 +648,20 @@ async function run() {
     `!document.getElementById('shortcuts-dialog').hidden`,
     'Keyboard Shortcuts dialog open for Close test'
   )
+  assert.equal(
+    await evaluate(
+      `document.activeElement === document.querySelector('#shortcuts-dialog button[data-close-modal]')`
+    ),
+    true
+  )
+  await press('Tab')
+  assert.equal(
+    await evaluate(
+      `document.activeElement === document.querySelector('#shortcuts-dialog button[data-close-modal]')`
+    ),
+    true
+  )
+  await press('Tab', ['shift'])
   assert.equal(
     await evaluate(
       `document.activeElement === document.querySelector('#shortcuts-dialog button[data-close-modal]')`
@@ -2147,6 +2165,60 @@ async function run() {
   await click('Open...')
   assert.equal(await evaluate('editor.getValue()'), valueBeforeLargeFilePrompt)
   assert.ok(messages.some((m) => /large/i.test(m.title || m.message)))
+  await evaluate(`(() => {
+      window.__phase10OpenFocus = {
+        read: null,
+        readTab: null,
+        model: null,
+        modelTab: null
+      }
+
+      const dialog = document.getElementById('open-progress-dialog')
+      const cancel = document.getElementById('open-progress-cancel')
+      const detail = document.getElementById('open-progress-detail')
+
+      const capture = () => {
+        if (
+          !dialog.hidden &&
+          !cancel.disabled &&
+          window.__phase10OpenFocus.read === null
+        ) {
+          window.__phase10OpenFocus.read = document.activeElement?.id ?? ''
+          dialog.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Tab',
+              bubbles: true,
+              cancelable: true
+            })
+          )
+          window.__phase10OpenFocus.readTab = document.activeElement?.id ?? ''
+        }
+
+        if (
+          /final step cannot be cancelled/i.test(detail.innerText) &&
+          window.__phase10OpenFocus.model === null
+        ) {
+          window.__phase10OpenFocus.model = document.activeElement?.id ?? ''
+          dialog.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Tab',
+              bubbles: true,
+              cancelable: true
+            })
+          )
+          window.__phase10OpenFocus.modelTab = document.activeElement?.id ?? ''
+        }
+      }
+
+      const observer = new MutationObserver(capture)
+      observer.observe(dialog, {
+        attributes: true,
+        childList: true,
+        subtree: true,
+        characterData: true
+      })
+      window.__phase10OpenFocusObserver = observer
+    })()`)
   response = 0
   await click('Open...')
   await until(
@@ -2164,6 +2236,20 @@ async function run() {
     30000
   )
   assert.equal(await evaluate(`document.getElementById('open-progress-dialog').hidden`), true)
+  const phase10OpenFocus = await evaluate(`(() => {
+      window.__phase10OpenFocusObserver?.disconnect()
+      return window.__phase10OpenFocus
+    })()`)
+
+  assert.deepEqual(phase10OpenFocus, {
+    read: 'open-progress-cancel',
+    readTab: 'open-progress-cancel',
+    model: 'open-progress-dialog',
+    modelTab: 'open-progress-dialog'
+  })
+  assert.equal(await evaluate(`editor.hasTextFocus()`), true)
+
+  console.log('PASS modal Tab containment and real large-file progress focus lifecycle')
   assert.equal(
     await evaluate(`editor.getOption(monaco.editor.EditorOption.renderWhitespace)`),
     'none'

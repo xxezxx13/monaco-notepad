@@ -632,6 +632,7 @@ async function withOpenRequest<T>(
       activeOpenRequestId = null
       openProgressDialog.hidden = true
       openProgressCancel.disabled = false
+      editor.focus()
     }
     if (cancelledOpenRequestId === requestId) cancelledOpenRequestId = null
   }
@@ -659,6 +660,7 @@ async function showOpenModelProgress(): Promise<void> {
   openProgressBar.value = openProgressBar.max
   openProgressCancel.disabled = true
   openProgressDialog.hidden = false
+  openProgressDialog.focus()
 
   // Give the progress UI an opportunity to paint before Monaco synchronously
   // replaces the full document buffer, but never let frame throttling stall
@@ -683,6 +685,17 @@ async function showOpenModelProgress(): Promise<void> {
   })
 }
 
+openProgressDialog.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab') return
+
+  event.preventDefault()
+  if (openProgressCancel.disabled) {
+    openProgressDialog.focus()
+  } else {
+    openProgressCancel.focus()
+  }
+})
+
 openProgressCancel.addEventListener('click', () => {
   const requestId = activeOpenRequestId
   if (!requestId || openProgressCancel.disabled) return
@@ -691,6 +704,7 @@ openProgressCancel.addEventListener('click', () => {
   openProgressStatus.textContent = 'Cancelling…'
   openProgressDetail.textContent = 'The current document will remain unchanged.'
   openProgressCancel.disabled = true
+  openProgressDialog.focus()
   void window.api.cancelOpen(requestId)
 })
 
@@ -1940,10 +1954,37 @@ function createModalController(
   })
 
   dialog.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      close()
+      return
+    }
 
-    event.preventDefault()
-    close()
+    if (event.key !== 'Tab') return
+
+    const focusable = [
+      ...dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+      )
+    ].filter((element) => element.tabIndex >= 0)
+
+    if (focusable.length === 0) {
+      event.preventDefault()
+      initialFocus()?.focus()
+      return
+    }
+
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    const active = document.activeElement
+
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+      event.preventDefault()
+      first.focus()
+    }
   })
 
   return {
