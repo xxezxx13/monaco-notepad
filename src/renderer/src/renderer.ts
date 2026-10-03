@@ -3365,7 +3365,9 @@ updateTitle()
 updateStatusBar()
 updateStatistics()
 
-void window.api.preferences.getAll().then((preferences) => {
+function applyPreferencesSnapshot(
+  preferences: Awaited<ReturnType<typeof window.api.preferences.getAll>>
+): void {
   applyTheme(preferences.theme)
   editor.updateOptions({
     fontFamily: preferences.fontFamily,
@@ -3390,11 +3392,10 @@ void window.api.preferences.getAll().then((preferences) => {
     insertSpaces: preferences.insertSpaces,
     largeFileWarningMiB: preferences.largeFileWarningMiB
   })
-})
+  monaco.editor.EditorZoom.setZoomLevel(preferences.zoomLevel)
+}
 
-void window.api.getZoomLevel().then((zoomLevel) => {
-  monaco.editor.EditorZoom.setZoomLevel(zoomLevel)
-})
+void window.api.preferences.getAll().then(applyPreferencesSnapshot)
 
 window.api.onSystemThemeChanged(() => {
   void window.api.preferences.getAll().then((preferences) => {
@@ -3451,6 +3452,15 @@ window.api.onPreferencesChanged((changes) => {
     })
   }
   syncMenuContext()
+})
+
+window.api.onPreferencesImported(() => {
+  void window.api.preferences.getAll().then((preferences) => {
+    const typewriterWasEnabled = typewriterScrollingPreference
+    applyPreferencesSnapshot(preferences)
+    if (preferences.typewriterScrolling && !typewriterWasEnabled) centerActiveCursorForTypewriter()
+    syncMenuContext()
+  })
 })
 
 monaco.editor.EditorZoom.onDidChangeZoomLevel((zoomLevel) => {

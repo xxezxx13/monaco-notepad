@@ -108,7 +108,11 @@ const api = {
   preferences: {
     getAll: (): Promise<Preferences> => ipcRenderer.invoke('preferences:get-all'),
     set: <K extends keyof Preferences>(key: K, value: Preferences[K]) =>
-      ipcRenderer.invoke('preferences:set', key, value)
+      ipcRenderer.invoke('preferences:set', key, value),
+    exportSettings: (): Promise<'exported' | 'canceled'> =>
+      ipcRenderer.invoke('preferences:export'),
+    importSettings: (): Promise<'imported' | 'canceled' | 'invalid'> =>
+      ipcRenderer.invoke('preferences:import')
   },
 
   getWordWrap: (): Promise<boolean> => ipcRenderer.invoke('preferences:get-word-wrap'),
@@ -329,6 +333,12 @@ const api = {
     return () => {
       ipcRenderer.removeListener('preferences:changed', listener)
     }
+  },
+
+  onPreferencesImported: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('preferences:imported', listener)
+    return () => ipcRenderer.removeListener('preferences:imported', listener)
   },
 
   onSystemThemeChanged: (callback: () => void): (() => void) => {

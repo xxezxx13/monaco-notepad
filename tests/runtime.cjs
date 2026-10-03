@@ -2243,6 +2243,295 @@ async function run() {
   assert.equal(preferences.lastDocumentPath, openPath)
   console.log('PASS responsive status bar and persisted preferences')
 
+  const settingsConfigPath = path.join(temporary, 'profile', 'config.json')
+  const portableSettingsKeys = [
+    'wordWrap',
+    'typewriterScrolling',
+    'zoomLevel',
+    'statusBarVisible',
+    'showWhitespace',
+    'showLineNumbers',
+    'reopenLastDocument',
+    'backupOnSave',
+    'trimTrailingWhitespaceOnSave',
+    'autoIndent',
+    'tabSize',
+    'insertSpaces',
+    'largeFileWarningMiB',
+    'theme',
+    'fontFamily',
+    'fontSize',
+    'defaultEncoding',
+    'defaultEol',
+    'primarySelectionPaste'
+  ]
+  const localSettingsKeys = [
+    'lastDocumentPath',
+    'lastDocumentEncoding',
+    'windowWidth',
+    'windowHeight',
+    'lastDirectory',
+    'recentFiles',
+    'filePositions'
+  ]
+
+  const portabilityBefore = await evaluate(`window.api.preferences.getAll()`)
+  const portabilityStoreBefore = JSON.parse(await fs.readFile(settingsConfigPath, 'utf8'))
+  const localSettingsBefore = Object.fromEntries(
+    localSettingsKeys.map((key) => [key, portabilityStoreBefore[key]])
+  )
+  const priorDialogSavePath = savePath
+  const priorDialogOpenPath = openPath
+
+  await evaluate(`window.api.openPreferencesDialog()`)
+  preferencesWindow = undefined
+  for (let attempt = 0; attempt < 120; attempt++) {
+    preferencesWindow = BrowserWindow.getAllWindows().find((candidate) => candidate !== window)
+    if (preferencesWindow && !preferencesWindow.webContents.isLoading()) break
+    await delay(50)
+  }
+  assert.ok(preferencesWindow, 'Preferences window for settings portability')
+  await untilIn(
+    preferencesWindow,
+    `!!document.getElementById('export-settings') && !!document.getElementById('import-settings')`,
+    'settings portability controls'
+  )
+
+  const baselineExportPath = path.join(temporary, 'settings-baseline.json')
+  savePath = baselineExportPath
+  await evaluateIn(preferencesWindow, `document.getElementById('export-settings').click()`)
+  await untilIn(
+    preferencesWindow,
+    `document.getElementById('settings-transfer-status').textContent === 'Settings exported.'`,
+    'baseline settings export'
+  )
+
+  const baselineExport = JSON.parse(await fs.readFile(baselineExportPath, 'utf8'))
+  assert.equal(baselineExport.format, 'monaco-notepad-settings')
+  assert.equal(baselineExport.version, 1)
+  assert.deepEqual(Object.keys(baselineExport.preferences).sort(), [...portableSettingsKeys].sort())
+  assert.deepEqual(
+    baselineExport.preferences,
+    Object.fromEntries(portableSettingsKeys.map((key) => [key, portabilityBefore[key]]))
+  )
+  for (const key of localSettingsKeys) {
+    assert.equal(
+      Object.hasOwn(baselineExport.preferences, key),
+      false,
+      `${key} excluded from export`
+    )
+  }
+
+  const importedSettings = {
+    wordWrap: !portabilityBefore.wordWrap,
+    typewriterScrolling: !portabilityBefore.typewriterScrolling,
+    zoomLevel: portabilityBefore.zoomLevel === 3 ? 4 : 3,
+    statusBarVisible: !portabilityBefore.statusBarVisible,
+    showWhitespace: !portabilityBefore.showWhitespace,
+    showLineNumbers: !portabilityBefore.showLineNumbers,
+    reopenLastDocument: !portabilityBefore.reopenLastDocument,
+    backupOnSave: !portabilityBefore.backupOnSave,
+    trimTrailingWhitespaceOnSave: !portabilityBefore.trimTrailingWhitespaceOnSave,
+    autoIndent: portabilityBefore.autoIndent === 'full' ? 'none' : 'full',
+    tabSize: portabilityBefore.tabSize === 8 ? 4 : 8,
+    insertSpaces: !portabilityBefore.insertSpaces,
+    largeFileWarningMiB: portabilityBefore.largeFileWarningMiB === 50 ? 20 : 50,
+    theme: portabilityBefore.theme === 'dark' ? 'light' : 'dark',
+    fontFamily: portabilityBefore.fontFamily === 'Monospace' ? 'Courier New' : 'Monospace',
+    fontSize: portabilityBefore.fontSize === 17 ? 18 : 17,
+    defaultEncoding: portabilityBefore.defaultEncoding === 'utf16be' ? 'utf8' : 'utf16be',
+    defaultEol: portabilityBefore.defaultEol === 'CRLF' ? 'LF' : 'CRLF',
+    primarySelectionPaste: !portabilityBefore.primarySelectionPaste
+  }
+
+  for (const key of portableSettingsKeys) {
+    assert.notDeepEqual(
+      importedSettings[key],
+      portabilityBefore[key],
+      `${key} import fixture differs`
+    )
+  }
+
+  const invalidImportPath = path.join(temporary, 'settings-invalid.json')
+  await fs.writeFile(
+    invalidImportPath,
+    JSON.stringify(
+      {
+        format: 'monaco-notepad-settings',
+        version: 1,
+        preferences: { ...importedSettings, lastDocumentPath: '/must/not/import' }
+      },
+      null,
+      2
+    )
+  )
+
+  const invalidApiBefore = await evaluate(`window.api.preferences.getAll()`)
+  const invalidStoreBefore = JSON.parse(await fs.readFile(settingsConfigPath, 'utf8'))
+  const importErrorsBefore = messages.filter(
+    (message) => message.title === 'Import Settings'
+  ).length
+  openPath = invalidImportPath
+  await evaluateIn(preferencesWindow, `document.getElementById('import-settings').click()`)
+  await untilIn(
+    preferencesWindow,
+    `document.getElementById('settings-transfer-status').textContent === 'Settings were not imported.'`,
+    'invalid settings import rejection'
+  )
+  assert.equal(
+    messages.filter((message) => message.title === 'Import Settings').length,
+    importErrorsBefore + 1
+  )
+  assert.deepEqual(await evaluate(`window.api.preferences.getAll()`), invalidApiBefore)
+  assert.deepEqual(JSON.parse(await fs.readFile(settingsConfigPath, 'utf8')), invalidStoreBefore)
+
+  const validImportPath = path.join(temporary, 'settings-valid.json')
+  await fs.writeFile(
+    validImportPath,
+    JSON.stringify(
+      {
+        format: 'monaco-notepad-settings',
+        version: 1,
+        preferences: importedSettings
+      },
+      null,
+      2
+    )
+  )
+
+  openPath = validImportPath
+  await evaluateIn(preferencesWindow, `document.getElementById('import-settings').click()`)
+  await untilIn(
+    preferencesWindow,
+    `document.getElementById('settings-transfer-status').textContent === 'Settings imported.'`,
+    'valid settings import'
+  )
+
+  await until(
+    `document.documentElement.dataset.theme === ${JSON.stringify(importedSettings.theme)} &&
+      monaco.editor.EditorZoom.getZoomLevel() === ${importedSettings.zoomLevel}`,
+    'imported theme and zoom'
+  )
+
+  const importedApi = await evaluate(`window.api.preferences.getAll()`)
+  for (const key of portableSettingsKeys) {
+    assert.deepEqual(importedApi[key], importedSettings[key], `${key} imported preference`)
+  }
+
+  const importedStore = JSON.parse(await fs.readFile(settingsConfigPath, 'utf8'))
+  assert.deepEqual(
+    Object.fromEntries(localSettingsKeys.map((key) => [key, importedStore[key]])),
+    localSettingsBefore
+  )
+
+  assert.equal(nativeTheme.themeSource, importedSettings.theme)
+  assert.equal(menuItem(importedSettings.theme === 'dark' ? 'Dark' : 'Light').checked, true)
+  assert.equal(
+    await evaluate(`editor.getOption(monaco.editor.EditorOption.wordWrap)`),
+    importedSettings.wordWrap ? 'on' : 'off'
+  )
+  assert.equal(
+    await evaluate(`editor.getOption(monaco.editor.EditorOption.renderWhitespace)`),
+    importedSettings.showWhitespace ? 'all' : 'none'
+  )
+  assert.equal(
+    await evaluate(`editor.getLayoutInfo().contentLeft > 20`),
+    importedSettings.showLineNumbers
+  )
+  assert.equal(
+    await evaluate(`document.getElementById('statusbar').style.display !== 'none'`),
+    importedSettings.statusBarVisible
+  )
+  assert.equal(await evaluate(`editor.getRawOptions().fontSize`), importedSettings.fontSize)
+  assert.equal(await evaluate(`editor.getModel().getOptions().tabSize`), importedSettings.tabSize)
+  assert.equal(
+    await evaluate(`editor.getModel().getOptions().insertSpaces`),
+    importedSettings.insertSpaces
+  )
+  assert.equal(
+    await evaluate(`editor.getOption(monaco.editor.EditorOption.autoIndent)`),
+    importedSettings.autoIndent === 'full' ? 4 : 0
+  )
+
+  await untilIn(
+    preferencesWindow,
+    `(() => {
+      const p = ${JSON.stringify(importedSettings)}
+      const checkedValue = (name) =>
+        [...document.querySelectorAll('input[name="' + name + '"]')].find((element) => element.checked)?.value
+      return document.getElementById('font-family').value === p.fontFamily &&
+        Number(document.getElementById('font-size').value) === p.fontSize &&
+        checkedValue('tab-size') === String(p.tabSize) &&
+        checkedValue('insert-spaces') === String(p.insertSpaces) &&
+        checkedValue('auto-indent') === p.autoIndent &&
+        document.getElementById('word-wrap').checked === p.wordWrap &&
+        document.getElementById('trim-trailing-whitespace').checked === p.trimTrailingWhitespaceOnSave &&
+        document.getElementById('show-whitespace').checked === p.showWhitespace &&
+        document.getElementById('show-line-numbers').checked === p.showLineNumbers &&
+        document.getElementById('primary-selection-paste').checked === p.primarySelectionPaste &&
+        document.getElementById('reopen-last-document').checked === p.reopenLastDocument &&
+        document.getElementById('backup-on-save').checked === p.backupOnSave &&
+        document.getElementById('large-file-warning').value === String(p.largeFileWarningMiB) &&
+        document.getElementById('default-encoding').value === p.defaultEncoding &&
+        document.getElementById('default-eol').value === p.defaultEol &&
+        document.getElementById('status-bar-visible').checked === p.statusBarVisible &&
+        checkedValue('theme') === p.theme
+    })()`,
+    'Preferences controls refreshed after import'
+  )
+
+  const importedExportPath = path.join(temporary, 'settings-imported-roundtrip.json')
+  savePath = importedExportPath
+  await evaluateIn(preferencesWindow, `document.getElementById('export-settings').click()`)
+  await untilIn(
+    preferencesWindow,
+    `document.getElementById('settings-transfer-status').textContent === 'Settings exported.'`,
+    'imported settings export'
+  )
+
+  const importedExport = JSON.parse(await fs.readFile(importedExportPath, 'utf8'))
+  assert.equal(importedExport.format, 'monaco-notepad-settings')
+  assert.equal(importedExport.version, 1)
+  assert.deepEqual(importedExport.preferences, importedSettings)
+  for (const key of localSettingsKeys) {
+    assert.equal(
+      Object.hasOwn(importedExport.preferences, key),
+      false,
+      `${key} excluded after import`
+    )
+  }
+
+  openPath = baselineExportPath
+  await evaluateIn(preferencesWindow, `document.getElementById('import-settings').click()`)
+  await until(
+    `document.documentElement.dataset.theme === ${JSON.stringify(portabilityBefore.theme)} &&
+      monaco.editor.EditorZoom.getZoomLevel() === ${portabilityBefore.zoomLevel}`,
+    'baseline settings restore'
+  )
+
+  const restoredApi = await evaluate(`window.api.preferences.getAll()`)
+  for (const key of portableSettingsKeys) {
+    assert.deepEqual(
+      restoredApi[key],
+      portabilityBefore[key],
+      `${key} restored after portability test`
+    )
+  }
+  const restoredStore = JSON.parse(await fs.readFile(settingsConfigPath, 'utf8'))
+  assert.deepEqual(
+    Object.fromEntries(localSettingsKeys.map((key) => [key, restoredStore[key]])),
+    localSettingsBefore
+  )
+
+  preferencesWindow.close()
+  await delay(150)
+  savePath = priorDialogSavePath
+  openPath = priorDialogOpenPath
+
+  console.log(
+    'PASS settings export/import validation, live refresh, local-state preservation, and JSON round-trip'
+  )
+
   await setText('newline state')
   assert.match(await evaluate(`document.getElementById('final-newline').innerText`), /No Final NL/)
   await click('Add Final Newline')

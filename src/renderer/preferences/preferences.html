@@ -111,6 +111,23 @@
             <label><input type="radio" name="theme" value="dark" /> Dark</label>
           </fieldset>
         </section>
+        <section>
+          <h2>Settings Transfer</h2>
+          <p class="settings-transfer-description">
+            Export or import portable preferences. Recent files, file paths, window size, cursor
+            history, and session state remain local to this installation.
+          </p>
+          <div class="settings-transfer-actions">
+            <button type="button" id="export-settings">Export Settings...</button>
+            <button type="button" id="import-settings">Import Settings...</button>
+          </div>
+          <p
+            id="settings-transfer-status"
+            class="settings-transfer-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </section>
       </form>
     </div>
     <script type="module" src="./preferences.ts"></script>

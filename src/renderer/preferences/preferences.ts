@@ -33,6 +33,11 @@ function applyTheme(theme: Preferences['theme'], portalTheme?: 'light' | 'dark' 
   document.documentElement.setAttribute('data-theme', resolved)
 }
 
+function setSettingsTransferStatus(message: string): void {
+  const status = $<HTMLElement>('settings-transfer-status')
+  if (status) status.textContent = message
+}
+
 function bindBoolean(id: string, key: keyof Preferences): void {
   const element = $<HTMLInputElement>(id)
   if (!element) return
@@ -141,6 +146,39 @@ bindSelect('default-eol', 'defaultEol')
 bindBoolean('status-bar-visible', 'statusBarVisible')
 bindRadio('theme', 'theme')
 
+const exportSettingsButton = $<HTMLButtonElement>('export-settings')
+exportSettingsButton?.addEventListener('click', () => {
+  exportSettingsButton.disabled = true
+  setSettingsTransferStatus('')
+
+  void window.api.preferences
+    .exportSettings()
+    .then((result) => {
+      if (result === 'exported') setSettingsTransferStatus('Settings exported.')
+    })
+    .catch(() => setSettingsTransferStatus('Settings export failed.'))
+    .finally(() => {
+      exportSettingsButton.disabled = false
+    })
+})
+
+const importSettingsButton = $<HTMLButtonElement>('import-settings')
+importSettingsButton?.addEventListener('click', () => {
+  importSettingsButton.disabled = true
+  setSettingsTransferStatus('')
+
+  void window.api.preferences
+    .importSettings()
+    .then((result) => {
+      if (result === 'imported') setSettingsTransferStatus('Settings imported.')
+      else if (result === 'invalid') setSettingsTransferStatus('Settings were not imported.')
+    })
+    .catch(() => setSettingsTransferStatus('Settings import failed.'))
+    .finally(() => {
+      importSettingsButton.disabled = false
+    })
+})
+
 window.api.onPreferencesChanged((changes) => {
   if (!changes.theme) return
 
@@ -148,6 +186,10 @@ window.api.onPreferencesChanged((changes) => {
   document
     .querySelectorAll<HTMLInputElement>(`input[name="theme"]`)
     .forEach((element) => (element.checked = changes.theme === element.value))
+})
+
+window.api.onPreferencesImported(() => {
+  void loadPreferences()
 })
 
 window.api.onSystemThemeChanged(() => {

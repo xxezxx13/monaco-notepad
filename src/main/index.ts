@@ -48,6 +48,7 @@ import {
   type Preferences,
   type FilePosition
 } from './preferences'
+import { createPortableSettingsFile, parsePortableSettingsJson } from './settings-portability'
 
 const approvedCloseWindows = new WeakSet<BrowserWindow>()
 let mainWindow: BrowserWindow | null = null
@@ -702,7 +703,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  ipcMain.handle('preferences:get-all', () => ({
+  const getAllPreferences = (): Preferences => ({
     wordWrap: preferences.get('wordWrap'),
     typewriterScrolling: preferences.get('typewriterScrolling'),
     zoomLevel: preferences.get('zoomLevel'),
@@ -729,7 +730,9 @@ app.whenReady().then(() => {
     defaultEol: preferences.get('defaultEol'),
     filePositions: preferences.get('filePositions'),
     primarySelectionPaste: preferences.get('primarySelectionPaste')
-  }))
+  })
+
+  ipcMain.handle('preferences:get-all', getAllPreferences)
 
   ipcMain.handle('preferences:set', (_event, key: keyof Preferences, value: unknown) => {
     preferences.set(key, value)
@@ -761,6 +764,64 @@ app.whenReady().then(() => {
     if (menuKeys.includes(key)) {
       installMenu(mainWindow!)
     }
+  })
+
+  ipcMain.handle('preferences:export', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || window !== preferencesWindow) {
+      throw new Error('Settings export is only available from Preferences')
+    }
+
+    const result = await dialog.showSaveDialog(window, {
+      title: 'Export Settings',
+      defaultPath: 'monaco-notepad-settings.json',
+      filters: [{ name: 'Monaco Notepad Settings', extensions: ['json'] }]
+    })
+
+    if (result.canceled || !result.filePath) return 'canceled'
+
+    const document = createPortableSettingsFile(getAllPreferences())
+    await writeFileAtomic(result.filePath, `${JSON.stringify(document, null, 2)}\n`)
+    return 'exported'
+  })
+
+  ipcMain.handle('preferences:import', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || window !== preferencesWindow) {
+      throw new Error('Settings import is only available from Preferences')
+    }
+
+    const result = await dialog.showOpenDialog(window, {
+      title: 'Import Settings',
+      properties: ['openFile'],
+      filters: [{ name: 'Monaco Notepad Settings', extensions: ['json'] }]
+    })
+
+    if (result.canceled || result.filePaths.length === 0) return 'canceled'
+
+    let document: ReturnType<typeof parsePortableSettingsJson>
+
+    try {
+      document = parsePortableSettingsJson(await readFile(result.filePaths[0], 'utf8'))
+    } catch (error) {
+      await dialog.showMessageBox(window, {
+        type: 'error',
+        title: 'Import Settings',
+        message: 'Settings were not imported.',
+        detail: error instanceof Error ? error.message : String(error)
+      })
+      return 'invalid'
+    }
+
+    const mergedPreferences: Preferences = { ...getAllPreferences(), ...document.preferences }
+    preferences.set(mergedPreferences)
+    nativeTheme.themeSource = document.preferences.theme
+
+    if (mainWindow) installMenu(mainWindow)
+    mainWindow?.webContents.send('preferences:imported')
+    preferencesWindow?.webContents.send('preferences:imported')
+
+    return 'imported'
   })
 
   ipcMain.handle('preferences:open-dialog', () => {
