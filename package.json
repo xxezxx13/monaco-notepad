@@ -24,7 +24,7 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "iconv-lite": "^0.7.3",
-    "monaco-editor": "^0.56.0",
+    "monaco-editor": "^0.57.0",
     "write-file-atomic": "^8.0.0"
   },
   "devDependencies": {
