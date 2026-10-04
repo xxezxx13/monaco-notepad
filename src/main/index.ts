@@ -80,6 +80,7 @@ interface DocumentWindowRuntime {
   savesInProgress: number
   followReader: FollowReader | null
   followPoll: Promise<void>
+  sessionOwner: boolean
   rendererReady: boolean
   pendingFilePath: string | null
 }
@@ -99,6 +100,7 @@ function documentWindowRuntimeFor(window: BrowserWindow): DocumentWindowRuntime 
       savesInProgress: 0,
       followReader: null,
       followPoll: Promise.resolve(),
+      sessionOwner: false,
       rendererReady: false,
       pendingFilePath: null
     }
@@ -613,7 +615,7 @@ function createPreferencesWindow(): void {
   }
 }
 
-function createWindow(): void {
+function createWindow(sessionOwner = false): void {
   traceStartup('window-construction-begin')
 
   // Create the browser window.
@@ -640,6 +642,7 @@ function createWindow(): void {
   traceStartup('window-construction-end', { webContentsId: window.webContents.id })
 
   const windowRuntime = documentWindowRuntimeFor(window)
+  windowRuntime.sessionOwner = sessionOwner
   if (startupPendingFilePath) {
     windowRuntime.pendingFilePath = startupPendingFilePath
     startupPendingFilePath = null
@@ -962,6 +965,14 @@ app.whenReady().then(() => {
     largeFileWarningMiB: preferences.get('largeFileWarningMiB')
   }))
 
+  ipcMain.handle('app:is-session-owner', (event): boolean => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || window === preferencesWindow) {
+      throw new Error('Unable to resolve document window')
+    }
+    return documentWindowRuntimeFor(window).sessionOwner
+  })
+
   ipcMain.handle('app:renderer-ready', (event, recoveryRestored = false) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
@@ -982,7 +993,11 @@ app.whenReady().then(() => {
       const filePath = windowRuntime.pendingFilePath
       windowRuntime.pendingFilePath = null
       window.webContents.send('app:open-file-requested', filePath)
-    } else if (!recoveryRestored && preferences.get('reopenLastDocument')) {
+    } else if (
+      windowRuntime.sessionOwner &&
+      !recoveryRestored &&
+      preferences.get('reopenLastDocument')
+    ) {
       const filePath = preferences.get('lastDocumentPath')
       if (filePath) {
         try {
@@ -1668,6 +1683,7 @@ app.whenReady().then(() => {
   ipcMain.handle('recovery:save', async (event, recovery: RecoveryData) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
+    if (!documentWindowRuntimeFor(window).sessionOwner) return
     if (!isRecoveryData(recovery)) throw new Error('Invalid recovery data')
 
     try {
@@ -1689,6 +1705,7 @@ app.whenReady().then(() => {
   ipcMain.handle('recovery:clear', async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
+    if (!documentWindowRuntimeFor(window).sessionOwner) return
 
     try {
       await clearRecovery()
@@ -1705,6 +1722,7 @@ app.whenReady().then(() => {
   ipcMain.handle('recovery:check', async (event): Promise<RecoveryData | null> => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
+    if (!documentWindowRuntimeFor(window).sessionOwner) return null
     // An explicit command-line or desktop file request wins over session state.
     if (documentWindowRuntimeFor(window).pendingFilePath) return null
 
@@ -1794,7 +1812,7 @@ app.whenReady().then(() => {
     window.close()
   })
 
-  createWindow()
+  createWindow(true)
 })
 
 app.on('window-all-closed', () => {

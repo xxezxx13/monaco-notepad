@@ -153,6 +153,12 @@ async function run() {
     })()`
   )
 
+  assert.equal(
+    await evaluate(window, `window.api.isSessionOwner()`),
+    true,
+    'initial document window must own session recovery'
+  )
+
   if (mode === 'visibility-fallback') {
     for (let attempt = 0; attempt < 120; attempt++) {
       if (window?.isVisible()) break

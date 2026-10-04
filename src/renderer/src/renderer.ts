@@ -559,6 +559,7 @@ if (!maybeModel) {
 const model = maybeModel
 const documentState = createDocumentState(model)
 let restoredSession: 'none' | 'recovered-file' | 'scratchpad' = 'none'
+let sessionOwner = false
 let recoveryTimer: number | null = null
 let statisticsTimer: number | null = null
 let documentGeneration = 0
@@ -2328,11 +2329,16 @@ function updateStatusBar(): void {
 function clearRecovery(): Promise<void> {
   if (recoveryTimer !== null) window.clearTimeout(recoveryTimer)
   recoveryTimer = null
+  if (!sessionOwner) return Promise.resolve()
   return window.api.clearRecovery()
 }
 
 function scheduleRecovery(): void {
   if (recoveryTimer !== null) window.clearTimeout(recoveryTimer)
+  if (!sessionOwner) {
+    recoveryTimer = null
+    return
+  }
 
   if (!isDocumentDirty(model, documentState)) {
     void clearRecovery()
@@ -3013,7 +3019,7 @@ window.api.onCloseRequested(() => {
       positionTimer = null
       void window.api.saveFilePosition(documentState.filePath, capturePosition())
     }
-    if (!documentState.filePath && isDocumentDirty(model, documentState)) {
+    if (sessionOwner && !documentState.filePath && isDocumentDirty(model, documentState)) {
       await window.api.saveRecovery({
         filePath: null,
         text: model.getValue(),
@@ -3509,7 +3515,8 @@ monaco.editor.EditorZoom.onDidChangeZoomLevel((zoomLevel) => {
 })
 
 runDocumentAction(async () => {
-  const recovery = await window.api.checkRecovery()
+  sessionOwner = await window.api.isSessionOwner()
+  const recovery = sessionOwner ? await window.api.checkRecovery() : null
 
   if (recovery) {
     documentGeneration++

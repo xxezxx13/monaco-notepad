@@ -133,6 +133,8 @@ const api = {
   getEditorPreferences: (): Promise<EditorPreferences> =>
     ipcRenderer.invoke('preferences:get-editor'),
 
+  isSessionOwner: (): Promise<boolean> => ipcRenderer.invoke('app:is-session-owner'),
+
   rendererReady: (recoveryRestored = false): Promise<void> =>
     ipcRenderer.invoke('app:renderer-ready', recoveryRestored),
 
