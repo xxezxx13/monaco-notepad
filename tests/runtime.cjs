@@ -11,6 +11,39 @@ const vm = require('node:vm')
 const ts = require('typescript')
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function processResourceSnapshot() {
+  const fdDirectory = `/proc/${process.pid}/fd`
+  let fileDescriptors = null
+  let inotifyDescriptors = null
+
+  try {
+    const entries = nodeFs.readdirSync(fdDirectory)
+    fileDescriptors = entries.length
+    inotifyDescriptors = 0
+
+    for (const entry of entries) {
+      try {
+        if (nodeFs.readlinkSync(path.join(fdDirectory, entry)) === 'anon_inode:inotify') {
+          inotifyDescriptors++
+        }
+      } catch {
+        /* Best-effort resource snapshot only. */
+      }
+    }
+  } catch {
+    /* Best-effort resource snapshot only. */
+  }
+
+  const browserMetric = app.getAppMetrics().find((metric) => metric.pid === process.pid)
+
+  return {
+    windows: BrowserWindow.getAllWindows().length,
+    fileDescriptors,
+    inotifyDescriptors,
+    workingSetSize: browserMetric?.memory?.workingSetSize ?? null
+  }
+}
 const messages = []
 let response = 1
 let savePath
@@ -1155,6 +1188,7 @@ async function run() {
 
   const compareBaselineModelCount = await evaluate(`monaco.editor.getModels().length`)
   assert.equal(await evaluate(`monaco.editor.getDiffEditors().length`), 0)
+  const compareResourceBefore = processResourceSnapshot()
 
   for (let cycle = 1; cycle <= 12; cycle++) {
     const compareReplacement = path.join(temporary, `compare-resource-${cycle}.txt`)
@@ -1192,6 +1226,42 @@ async function run() {
   )
 
   const overwriteReplacement = path.join(temporary, 'external-overwrite-target.txt')
+  const compareResourceAfter = processResourceSnapshot()
+  assert.equal(compareResourceAfter.windows, compareResourceBefore.windows)
+  if (
+    compareResourceBefore.inotifyDescriptors !== null &&
+    compareResourceAfter.inotifyDescriptors !== null
+  ) {
+    assert.equal(
+      compareResourceAfter.inotifyDescriptors,
+      compareResourceBefore.inotifyDescriptors,
+      'Compare cycles must not accumulate inotify descriptors'
+    )
+  }
+  console.log(
+    'RESOURCE compare browser ' +
+      JSON.stringify({
+        before: compareResourceBefore,
+        after: compareResourceAfter,
+        delta: {
+          fileDescriptors:
+            compareResourceAfter.fileDescriptors !== null &&
+            compareResourceBefore.fileDescriptors !== null
+              ? compareResourceAfter.fileDescriptors - compareResourceBefore.fileDescriptors
+              : null,
+          inotifyDescriptors:
+            compareResourceAfter.inotifyDescriptors !== null &&
+            compareResourceBefore.inotifyDescriptors !== null
+              ? compareResourceAfter.inotifyDescriptors - compareResourceBefore.inotifyDescriptors
+              : null,
+          workingSetSize:
+            compareResourceAfter.workingSetSize !== null &&
+            compareResourceBefore.workingSetSize !== null
+              ? compareResourceAfter.workingSetSize - compareResourceBefore.workingSetSize
+              : null
+        }
+      })
+  )
   await fs.writeFile(overwriteReplacement, 'external overwrite target')
   response = 3
   await fs.rename(overwriteReplacement, savePath)
