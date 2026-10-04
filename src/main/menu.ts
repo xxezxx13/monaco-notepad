@@ -178,7 +178,7 @@ export function activateMenuContextState(window: BrowserWindow): void {
 export function setMenuContextState(window: BrowserWindow, state: MenuContextState): void {
   menuContextStates.set(window, { ...state })
 
-  if (BrowserWindow.getFocusedWindow() !== window) return
+  if (focusedDocumentWindow() !== window) return
   activateMenuContextState(window)
 }
 
