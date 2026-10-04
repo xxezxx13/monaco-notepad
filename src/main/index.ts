@@ -53,7 +53,7 @@ import { createPortableSettingsFile, parsePortableSettingsJson } from './setting
 const approvedCloseWindows = new WeakSet<BrowserWindow>()
 let mainWindow: BrowserWindow | null = null
 let preferencesWindow: BrowserWindow | null = null
-let pendingFilePath: string | null = null
+let startupPendingFilePath: string | null = null
 const saveBaselines = new WeakMap<BrowserWindow, ReturnType<typeof createSaveBaselineTracker>>()
 
 function saveBaselineFor(window: BrowserWindow): ReturnType<typeof createSaveBaselineTracker> {
@@ -74,6 +74,8 @@ interface DocumentWindowRuntime {
   savesInProgress: number
   followReader: FollowReader | null
   followPoll: Promise<void>
+  rendererReady: boolean
+  pendingFilePath: string | null
 }
 
 const documentWindowRuntimes = new WeakMap<BrowserWindow, DocumentWindowRuntime>()
@@ -90,13 +92,14 @@ function documentWindowRuntimeFor(window: BrowserWindow): DocumentWindowRuntime 
       pendingFileSignature: null,
       savesInProgress: 0,
       followReader: null,
-      followPoll: Promise.resolve()
+      followPoll: Promise.resolve(),
+      rendererReady: false,
+      pendingFilePath: null
     }
     documentWindowRuntimes.set(window, runtime)
   }
   return runtime
 }
-let rendererReady = false
 let recoveryErrorShown = false
 let recoveryWrite: Promise<void> = Promise.resolve()
 let portalMonitor: ReturnType<typeof spawn> | null = null
@@ -474,16 +477,20 @@ function filePathFromArguments(argv: string[], workingDirectory = process.cwd())
 }
 
 function requestFileOpen(filePath: string): void {
-  pendingFilePath = filePath
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    startupPendingFilePath = filePath
+    return
+  }
 
-  if (!mainWindow || mainWindow.isDestroyed()) return
+  const windowRuntime = documentWindowRuntimeFor(mainWindow)
+  windowRuntime.pendingFilePath = filePath
 
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
 
-  if (!mainWindow.webContents.isLoading() && rendererReady) {
-    pendingFilePath = null
+  if (!mainWindow.webContents.isLoading() && windowRuntime.rendererReady) {
+    windowRuntime.pendingFilePath = null
     mainWindow.webContents.send('app:open-file-requested', filePath)
   }
 }
@@ -499,14 +506,14 @@ if (!hasSingleInstanceLock) {
   traceStartup('single-instance-lock-denied')
   app.quit()
 } else {
-  pendingFilePath = filePathFromArguments(process.argv)
+  startupPendingFilePath = filePathFromArguments(process.argv)
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
     const filePath = filePathFromArguments(argv, workingDirectory)
     traceStartup('second-instance', {
       hasFilePath: Boolean(filePath),
       windowExists: Boolean(mainWindow),
-      rendererReady
+      rendererReady: mainWindow ? documentWindowRuntimeFor(mainWindow).rendererReady : false
     })
     if (filePath) requestFileOpen(filePath)
     else if (mainWindow) {
@@ -589,7 +596,6 @@ function createWindow(): void {
   traceStartup('window-construction-begin')
 
   // Create the browser window.
-  rendererReady = false
   mainWindow = new BrowserWindow({
     width: preferences.get('windowWidth'),
     height: preferences.get('windowHeight'),
@@ -609,6 +615,12 @@ function createWindow(): void {
     }
   })
   traceStartup('window-construction-end', { webContentsId: mainWindow.webContents.id })
+
+  const windowRuntime = documentWindowRuntimeFor(mainWindow)
+  if (startupPendingFilePath) {
+    windowRuntime.pendingFilePath = startupPendingFilePath
+    startupPendingFilePath = null
+  }
 
   mainWindow.on('ready-to-show', () => {
     traceStartup('ready-to-show')
@@ -671,7 +683,7 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     traceStartup('window-closed')
     if (mainWindow) stopWatchingFile(mainWindow)
-    rendererReady = false
+    if (mainWindow) documentWindowRuntimeFor(mainWindow).rendererReady = false
     mainWindow = null
   })
 
@@ -934,21 +946,22 @@ app.whenReady().then(() => {
   ipcMain.handle('app:renderer-ready', (event, recoveryRestored = false) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
+    const windowRuntime = documentWindowRuntimeFor(window)
 
     traceStartup('renderer-ready-ipc', {
       recoveryRestored,
-      pendingFile: Boolean(pendingFilePath),
+      pendingFile: Boolean(windowRuntime.pendingFilePath),
       windowVisible: window.isVisible()
     })
-    rendererReady = true
+    windowRuntime.rendererReady = true
 
     if (!window.isVisible()) {
       traceStartup('show-requested', { reason: 'renderer-ready-fallback' })
       window.show()
     }
-    if (pendingFilePath) {
-      const filePath = pendingFilePath
-      pendingFilePath = null
+    if (windowRuntime.pendingFilePath) {
+      const filePath = windowRuntime.pendingFilePath
+      windowRuntime.pendingFilePath = null
       window.webContents.send('app:open-file-requested', filePath)
     } else if (!recoveryRestored && preferences.get('reopenLastDocument')) {
       const filePath = preferences.get('lastDocumentPath')
@@ -1669,7 +1682,7 @@ app.whenReady().then(() => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Unable to resolve application window')
     // An explicit command-line or desktop file request wins over session state.
-    if (pendingFilePath) return null
+    if (documentWindowRuntimeFor(window).pendingFilePath) return null
 
     let recovery: RecoveryData
 
