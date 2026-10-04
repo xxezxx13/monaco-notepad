@@ -559,8 +559,8 @@ function createWindow(): void {
     minHeight: 250,
     show: false,
     autoHideMenuBar: false,
-    backgroundColor: '#ffffff',
-    darkTheme: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#101722' : '#ffffff',
+    darkTheme: nativeTheme.shouldUseDarkColors,
     icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
