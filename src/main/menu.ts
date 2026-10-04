@@ -32,11 +32,17 @@ const followBlockedCommands = new Set<MenuCommand>([
   'reopen-encoding:windows1252'
 ])
 
-let menuContextState: MenuContextState = {
+const defaultMenuContextState: MenuContextState = {
   followActive: false,
   followEnabled: false,
   readOnly: false,
   readOnlyToggleEnabled: true
+}
+
+const menuContextStates = new WeakMap<BrowserWindow, MenuContextState>()
+
+function menuContextStateFor(window: BrowserWindow): MenuContextState {
+  return menuContextStates.get(window) ?? defaultMenuContextState
 }
 
 function menuCommandId(command: string): string {
@@ -121,13 +127,18 @@ export function recordRecentFile(
   installMenu(window)
 }
 
-export function setMenuContextState(state: MenuContextState): void {
-  menuContextState = { ...state }
-
+export function activateMenuContextState(window: BrowserWindow): void {
   const menu = Menu.getApplicationMenu()
   if (!menu) return
 
-  applyMenuContextState(menu, menuContextState)
+  applyMenuContextState(menu, menuContextStateFor(window))
+}
+
+export function setMenuContextState(window: BrowserWindow, state: MenuContextState): void {
+  menuContextStates.set(window, { ...state })
+
+  if (BrowserWindow.getFocusedWindow() !== window) return
+  activateMenuContextState(window)
 }
 
 export function installMenu(window: BrowserWindow): void {
@@ -772,6 +783,6 @@ export function installMenu(window: BrowserWindow): void {
     }
   ])
 
-  applyMenuContextState(menu, menuContextState)
+  applyMenuContextState(menu, menuContextStateFor(window))
   Menu.setApplicationMenu(menu)
 }

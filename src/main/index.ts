@@ -39,7 +39,12 @@ import {
 import { FollowReader } from './follow'
 import { portalThemeFromOutput, type PortalTheme } from './portal'
 import { selectionDigests, type SelectionHashAlgorithm } from './selection-hash'
-import { installMenu, recordRecentFile, setMenuContextState } from './menu'
+import {
+  activateMenuContextState,
+  installMenu,
+  recordRecentFile,
+  setMenuContextState
+} from './menu'
 import type { MenuContextState } from '../shared/commands'
 import {
   preferences,
@@ -661,6 +666,7 @@ function createWindow(): void {
 
   window.on('focus', () => {
     checkWatchedFile(window)
+    activateMenuContextState(window)
   })
 
   window.on('resize', () => {
@@ -1533,8 +1539,13 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('menu:context-state', (_event, state: MenuContextState) => {
-    setMenuContextState({
+  ipcMain.handle('menu:context-state', (event, state: MenuContextState) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window || window === preferencesWindow) {
+      throw new Error('Unable to resolve document window')
+    }
+
+    setMenuContextState(window, {
       followActive: Boolean(state.followActive),
       followEnabled: Boolean(state.followEnabled),
       readOnly: Boolean(state.readOnly),
