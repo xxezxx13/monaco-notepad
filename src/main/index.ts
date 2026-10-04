@@ -596,7 +596,7 @@ function createWindow(): void {
   traceStartup('window-construction-begin')
 
   // Create the browser window.
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: preferences.get('windowWidth'),
     height: preferences.get('windowHeight'),
     minWidth: 400,
@@ -614,84 +614,83 @@ function createWindow(): void {
       spellcheck: false
     }
   })
-  traceStartup('window-construction-end', { webContentsId: mainWindow.webContents.id })
+  mainWindow = window
+  traceStartup('window-construction-end', { webContentsId: window.webContents.id })
 
-  const windowRuntime = documentWindowRuntimeFor(mainWindow)
+  const windowRuntime = documentWindowRuntimeFor(window)
   if (startupPendingFilePath) {
     windowRuntime.pendingFilePath = startupPendingFilePath
     startupPendingFilePath = null
   }
 
-  mainWindow.on('ready-to-show', () => {
+  window.on('ready-to-show', () => {
     traceStartup('ready-to-show')
     traceStartup('show-requested', { reason: 'ready-to-show' })
-    mainWindow?.show()
+    window.show()
   })
 
-  mainWindow.on('show', () => {
-    traceStartup('window-show', { visible: mainWindow?.isVisible() ?? false })
+  window.on('show', () => {
+    traceStartup('window-show', { visible: window.isVisible() })
   })
 
-  mainWindow.on('unresponsive', () => {
+  window.on('unresponsive', () => {
     traceStartup('window-unresponsive')
   })
 
-  mainWindow.webContents.on('did-start-loading', () => {
+  window.webContents.on('did-start-loading', () => {
     traceStartup('load-started')
   })
 
-  mainWindow.webContents.on('did-finish-load', () => {
+  window.webContents.on('did-finish-load', () => {
     traceStartup('load-finished')
   })
 
-  mainWindow.webContents.on(
+  window.webContents.on(
     'did-fail-load',
     (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
       traceStartup('load-failed', { errorCode, errorDescription, isMainFrame })
     }
   )
 
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+  window.webContents.on('render-process-gone', (_event, details) => {
     traceStartup('render-process-gone', {
       reason: details.reason,
       exitCode: details.exitCode
     })
   })
 
-  mainWindow.on('focus', () => {
-    if (mainWindow) checkWatchedFile(mainWindow)
+  window.on('focus', () => {
+    checkWatchedFile(window)
   })
 
-  mainWindow.on('resize', () => {
-    if (!mainWindow) return
-    const [width, height] = mainWindow.getSize()
+  window.on('resize', () => {
+    const [width, height] = window.getSize()
     preferences.set('windowWidth', width)
     preferences.set('windowHeight', height)
   })
 
-  mainWindow.on('close', (event) => {
-    if (!mainWindow) return
-    if (approvedCloseWindows.has(mainWindow)) {
-      approvedCloseWindows.delete(mainWindow)
+  window.on('close', (event) => {
+    if (approvedCloseWindows.has(window)) {
+      approvedCloseWindows.delete(window)
       return
     }
 
     event.preventDefault()
-    mainWindow.webContents.send('app:close-requested')
+    window.webContents.send('app:close-requested')
   })
 
-  mainWindow.on('closed', () => {
+  window.on('closed', () => {
     traceStartup('window-closed')
-    if (mainWindow) stopWatchingFile(mainWindow)
-    if (mainWindow) documentWindowRuntimeFor(mainWindow).rendererReady = false
-    mainWindow = null
+    stopWatchingFile(window)
+    windowRuntime.rendererReady = false
+    if (mainWindow === window) mainWindow = null
   })
 
   // Chromium consumes standard Ctrl++ / Ctrl+- editor zoom chords before
   // the renderer can reliably observe them. Own editor zoom at the
   // WebContents boundary and route it through the same command path as
   // the View menu while preventing Chromium page zoom.
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+  window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
 
     let command: 'zoom-in' | 'zoom-out' | 'zoom-reset' | null = null
@@ -703,21 +702,21 @@ function createWindow(): void {
     if (!command) return
 
     event.preventDefault()
-    mainWindow?.webContents.send('menu:command', command)
+    window.webContents.send('menu:command', command)
   })
 
-  installRendererNavigationPolicy(mainWindow)
+  installRendererNavigationPolicy(window)
 
-  installMenu(mainWindow)
+  installMenu(window)
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     traceStartup('load-begin', { source: 'development' })
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    window.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     traceStartup('load-begin', { source: 'packaged' })
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    window.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
