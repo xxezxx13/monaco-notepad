@@ -62,5 +62,5 @@ linux:
   maintainer: Kelvin
   category: Utility
 appImage:
-  artifactName: monaco-notepad-v4-x86_64.AppImage
+  artifactName: monaco-notepad-v5-x86_64.AppImage
 npmRebuild: false

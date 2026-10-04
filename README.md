@@ -6,23 +6,22 @@ A minimal, single-document Linux desktop text editor built with Electron, Monaco
 
 ## Version
 
-**Monaco Notepad v4**
+**Monaco Notepad v5**
 
-v4 is the current release of Monaco Notepad.
+v5 is the current release of Monaco Notepad.
 
-## What's new in v4
+## What's new in v5
 
-- Centralized application commands and keyboard shortcuts in a canonical shared registry
-- Added deterministic runtime coverage for all 28 canonical shortcuts
-- Unified modal behavior for Keyboard Shortcuts and Document Inspector
-- Made native menu checked/enabled state follow authoritative document context
-- Hardened Recent Files normalization, missing-file pruning, deduplication, and clearing
-- Routed drag-and-drop opening through the same guarded Safe Open pipeline as normal file opening
-- Added Find Previous (`Shift+F3`) as a canonical, tested command
-- Improved recovery/session presentation and transient command feedback
-- Hardened privileged-window navigation and external URL handling
-- Improved Print behavior with configured-printer preflight and explicit failure reporting
-- Expanded permanent command, security, print, runtime, and startup regression coverage
+- Hardened Flatpak startup visibility with a renderer-ready fallback when `ready-to-show` is not delivered
+- Added opt-in local startup tracing for deterministic startup diagnosis without telemetry or network reporting
+- Strengthened external file-change conflict handling for modified, replaced, and deleted files
+- Added exact save-byte regression coverage for UTF-8, UTF-8 BOM, UTF-16 LE/BE, and Windows-1252
+- Expanded Find Next, Find Previous, wraparound, and Go To Line runtime coverage
+- Distinguished persistent scratchpad restoration from recovered-file sessions
+- Added versioned JSON settings export/import while preserving machine-local state
+- Improved keyboard focus containment and restoration across dialogs and large-file progress UI
+- Added deterministic Compare Against Disk resource-lifecycle guards for Monaco models, windows, and inotify descriptors
+- Established measured startup and resource baselines without adding telemetry or speculative performance changes
 
 ## Features
 
