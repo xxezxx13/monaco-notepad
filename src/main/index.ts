@@ -615,7 +615,7 @@ function createPreferencesWindow(): void {
   }
 }
 
-function createWindow(sessionOwner = false): void {
+function createWindow(sessionOwner = false, initialFilePath: string | null = null): void {
   traceStartup('window-construction-begin')
 
   // Create the browser window.
@@ -643,10 +643,7 @@ function createWindow(sessionOwner = false): void {
 
   const windowRuntime = documentWindowRuntimeFor(window)
   windowRuntime.sessionOwner = sessionOwner
-  if (startupPendingFilePath) {
-    windowRuntime.pendingFilePath = startupPendingFilePath
-    startupPendingFilePath = null
-  }
+  windowRuntime.pendingFilePath = initialFilePath
 
   window.on('ready-to-show', () => {
     traceStartup('ready-to-show')
@@ -1812,7 +1809,9 @@ app.whenReady().then(() => {
     window.close()
   })
 
-  createWindow(true)
+  const initialFilePath = startupPendingFilePath
+  startupPendingFilePath = null
+  createWindow(true, initialFilePath)
 })
 
 app.on('window-all-closed', () => {
