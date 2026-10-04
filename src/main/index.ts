@@ -54,7 +54,16 @@ const approvedCloseWindows = new WeakSet<BrowserWindow>()
 let mainWindow: BrowserWindow | null = null
 let preferencesWindow: BrowserWindow | null = null
 let pendingFilePath: string | null = null
-const saveBaseline = createSaveBaselineTracker()
+const saveBaselines = new WeakMap<BrowserWindow, ReturnType<typeof createSaveBaselineTracker>>()
+
+function saveBaselineFor(window: BrowserWindow): ReturnType<typeof createSaveBaselineTracker> {
+  let baseline = saveBaselines.get(window)
+  if (!baseline) {
+    baseline = createSaveBaselineTracker()
+    saveBaselines.set(window, baseline)
+  }
+  return baseline
+}
 let watchedFilePath: string | null = null
 let watchedFileSignature: string | null = null
 let fileWatchers: FSWatcher[] = []
@@ -944,7 +953,7 @@ app.whenReady().then(() => {
       try {
         const result = await openFileDialog(window, bomlessEncoding, openRequest.options)
         if (result) {
-          saveBaseline.record(result.filePath)
+          saveBaselineFor(window).record(result.filePath)
           recordRecentFile(
             window,
             result.filePath,
@@ -986,7 +995,7 @@ app.whenReady().then(() => {
       try {
         const result = await openFilePath(filePath, bomlessEncoding, window, openRequest.options)
         if (result) {
-          saveBaseline.record(result.filePath)
+          saveBaselineFor(window).record(result.filePath)
           recordRecentFile(
             window,
             result.filePath,
@@ -1065,7 +1074,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     'file:accept-reopen-baseline',
-    (_event, filePath: string, baselineSignature: string) => {
+    (event, filePath: string, baselineSignature: string) => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      if (!window) throw new Error('Unable to resolve application window')
       if (
         typeof filePath !== 'string' ||
         filePath.length === 0 ||
@@ -1075,7 +1086,7 @@ app.whenReady().then(() => {
         throw new Error('Invalid reopen baseline')
       }
 
-      saveBaseline.recordSignature(filePath, baselineSignature)
+      saveBaselineFor(window).recordSignature(filePath, baselineSignature)
     }
   )
 
@@ -1115,7 +1126,7 @@ app.whenReady().then(() => {
       if (
         request.filePath &&
         request.baselineCheck !== false &&
-        saveBaseline.check(request.filePath)
+        saveBaselineFor(window).check(request.filePath)
       ) {
         return { action: 'conflict', signature: fileSignature(request.filePath) }
       }
@@ -1135,7 +1146,7 @@ app.whenReady().then(() => {
       try {
         const filePath = await saveFile(window, request, 'Save As', preferences.get('backupOnSave'))
         if (filePath) {
-          saveBaseline.record(filePath)
+          saveBaselineFor(window).record(filePath)
           watchFile(window, filePath)
           recordRecentFile(
             window,
