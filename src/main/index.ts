@@ -64,19 +64,42 @@ function saveBaselineFor(window: BrowserWindow): ReturnType<typeof createSaveBas
   }
   return baseline
 }
-let watchedFilePath: string | null = null
-let watchedFileSignature: string | null = null
-let fileWatchers: FSWatcher[] = []
-let fileWatchTimer: NodeJS.Timeout | null = null
-let externalChangePending = false
-let pendingFileSignature: string | null = null
-let savesInProgress = 0
+interface DocumentWindowRuntime {
+  watchedFilePath: string | null
+  watchedFileSignature: string | null
+  fileWatchers: FSWatcher[]
+  fileWatchTimer: NodeJS.Timeout | null
+  externalChangePending: boolean
+  pendingFileSignature: string | null
+  savesInProgress: number
+  followReader: FollowReader | null
+  followPoll: Promise<void>
+}
+
+const documentWindowRuntimes = new WeakMap<BrowserWindow, DocumentWindowRuntime>()
+
+function documentWindowRuntimeFor(window: BrowserWindow): DocumentWindowRuntime {
+  let runtime = documentWindowRuntimes.get(window)
+  if (!runtime) {
+    runtime = {
+      watchedFilePath: null,
+      watchedFileSignature: null,
+      fileWatchers: [],
+      fileWatchTimer: null,
+      externalChangePending: false,
+      pendingFileSignature: null,
+      savesInProgress: 0,
+      followReader: null,
+      followPoll: Promise.resolve()
+    }
+    documentWindowRuntimes.set(window, runtime)
+  }
+  return runtime
+}
 let rendererReady = false
 let recoveryErrorShown = false
 let recoveryWrite: Promise<void> = Promise.resolve()
 let portalMonitor: ReturnType<typeof spawn> | null = null
-let followReader: FollowReader | null = null
-let followPoll: Promise<void> = Promise.resolve()
 const activeOpenRequests = new Map<number, Map<string, AbortController>>()
 const startupTracePath = process.env.MONACO_NOTEPAD_STARTUP_TRACE?.trim() || null
 const startupTraceStartedAt = process.hrtime.bigint()
@@ -324,27 +347,32 @@ async function reportRecoveryError(
   })
 }
 
-function stopWatchingFile(): void {
-  if (fileWatchTimer) clearTimeout(fileWatchTimer)
-  fileWatchTimer = null
-  for (const watcher of fileWatchers) watcher.close()
-  fileWatchers = []
-  watchedFilePath = null
-  watchedFileSignature = null
-  externalChangePending = false
-  pendingFileSignature = null
+function stopWatchingFile(window: BrowserWindow): void {
+  const runtime = documentWindowRuntimeFor(window)
+  if (runtime.fileWatchTimer) clearTimeout(runtime.fileWatchTimer)
+  runtime.fileWatchTimer = null
+  for (const watcher of runtime.fileWatchers) watcher.close()
+  runtime.fileWatchers = []
+  runtime.watchedFilePath = null
+  runtime.watchedFileSignature = null
+  runtime.externalChangePending = false
+  runtime.pendingFileSignature = null
 }
 
 function checkWatchedFile(window: BrowserWindow): void {
-  if (!watchedFilePath || externalChangePending || savesInProgress > 0) return
+  const runtime = documentWindowRuntimeFor(window)
+  const watchedFilePath = runtime.watchedFilePath
+  if (!watchedFilePath || runtime.externalChangePending || runtime.savesInProgress > 0) return
 
-  if (followReader?.filePath === watchedFilePath) {
-    followPoll = followPoll
+  if (runtime.followReader?.filePath === watchedFilePath) {
+    runtime.followPoll = runtime.followPoll
       .then(async () => {
-        if (!followReader || followReader.filePath !== watchedFilePath) return
-        const updates = await followReader.poll()
+        const currentPath = runtime.watchedFilePath
+        if (!runtime.followReader || !currentPath || runtime.followReader.filePath !== currentPath)
+          return
+        const updates = await runtime.followReader.poll()
         for (const update of updates) window.webContents.send('file:follow-update', update)
-        watchedFileSignature = fileSignature(watchedFilePath)
+        runtime.watchedFileSignature = fileSignature(currentPath)
       })
       .catch((error) => {
         window.webContents.send(
@@ -355,12 +383,12 @@ function checkWatchedFile(window: BrowserWindow): void {
     return
   }
 
-  const previousSignature = watchedFileSignature
+  const previousSignature = runtime.watchedFileSignature
   const signature = fileSignature(watchedFilePath)
   if (signature === previousSignature) return
 
-  externalChangePending = true
-  pendingFileSignature = signature
+  runtime.externalChangePending = true
+  runtime.pendingFileSignature = signature
   window.webContents.send('file:external-change', {
     filePath: watchedFilePath,
     exists: signature !== null,
@@ -370,27 +398,28 @@ function checkWatchedFile(window: BrowserWindow): void {
 }
 
 function watchFile(window: BrowserWindow, filePath: string | null): void {
-  stopWatchingFile()
+  stopWatchingFile(window)
   if (!filePath) return
 
-  watchedFilePath = filePath
-  watchedFileSignature = fileSignature(filePath)
+  const runtime = documentWindowRuntimeFor(window)
+  runtime.watchedFilePath = filePath
+  runtime.watchedFileSignature = fileSignature(filePath)
 
   watchFileDirectories(window, filePath)
 }
 
 function watchFileDirectories(window: BrowserWindow, filePath: string): void {
-  for (const watcher of fileWatchers) watcher.close()
-  fileWatchers = []
+  const runtime = documentWindowRuntimeFor(window)
+  for (const watcher of runtime.fileWatchers) watcher.close()
+  runtime.fileWatchers = []
 
-  // Watch directories, since atomic replacements invalidate inode-based watches.
-  // A symlink and its target may live in different directories.
   const paths = new Set([filePath])
   try {
     paths.add(realpathSync(filePath))
   } catch {
     // Keep watching the requested name so deletion/recreation is still detected.
   }
+
   const directories = new Map<string, Set<string>>()
   for (const path of paths) {
     const directory = dirname(path)
@@ -404,13 +433,13 @@ function watchFileDirectories(window: BrowserWindow, filePath: string): void {
       const watcher = watch(directory, (_eventType, changedName) => {
         if (changedName && !names.has(changedName.toString())) return
 
-        if (fileWatchTimer) clearTimeout(fileWatchTimer)
-        fileWatchTimer = setTimeout(() => checkWatchedFile(window), 150)
+        if (runtime.fileWatchTimer) clearTimeout(runtime.fileWatchTimer)
+        runtime.fileWatchTimer = setTimeout(() => checkWatchedFile(window), 150)
       })
 
-      fileWatchers.push(watcher)
+      runtime.fileWatchers.push(watcher)
       watcher.on('error', (error) => {
-        stopWatchingFile()
+        stopWatchingFile(window)
         void dialog.showMessageBox(window, {
           type: 'warning',
           title: 'File Monitoring Error',
@@ -421,7 +450,7 @@ function watchFileDirectories(window: BrowserWindow, filePath: string): void {
       })
     }
   } catch (error) {
-    stopWatchingFile()
+    stopWatchingFile(window)
     const detail = error instanceof Error ? error.message : String(error)
     void dialog.showMessageBox(window, {
       type: 'warning',
@@ -641,7 +670,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     traceStartup('window-closed')
-    stopWatchingFile()
+    if (mainWindow) stopWatchingFile(mainWindow)
     rendererReady = false
     mainWindow = null
   })
@@ -1142,7 +1171,8 @@ app.whenReady().then(() => {
         }
       }
 
-      savesInProgress++
+      const windowRuntime = documentWindowRuntimeFor(window)
+      windowRuntime.savesInProgress++
       try {
         const filePath = await saveFile(window, request, 'Save As', preferences.get('backupOnSave'))
         if (filePath) {
@@ -1169,7 +1199,7 @@ app.whenReady().then(() => {
 
         return { action: 'error', message: detail }
       } finally {
-        savesInProgress--
+        windowRuntime.savesInProgress--
         checkWatchedFile(window)
       }
     }
@@ -1469,20 +1499,26 @@ app.whenReady().then(() => {
       if (!['utf8', 'utf8-bom', 'utf16le', 'utf16be', 'windows1252'].includes(encoding)) {
         throw new Error('Unsupported file encoding')
       }
-      followReader = await FollowReader.create(resolve(filePath), encoding)
-      externalChangePending = false
-      pendingFileSignature = null
-      watchedFileSignature = fileSignature(followReader.filePath)
-      return { size: followReader.consumedBytes }
+      const windowRuntime = documentWindowRuntimeFor(window)
+      windowRuntime.followReader = await FollowReader.create(resolve(filePath), encoding)
+      windowRuntime.externalChangePending = false
+      windowRuntime.pendingFileSignature = null
+      windowRuntime.watchedFileSignature = fileSignature(windowRuntime.followReader.filePath)
+      return { size: windowRuntime.followReader.consumedBytes }
     }
   )
 
-  ipcMain.handle('file:follow-stop', async () => {
-    await followPoll
-    followReader = null
-    externalChangePending = false
-    pendingFileSignature = null
-    if (watchedFilePath) watchedFileSignature = fileSignature(watchedFilePath)
+  ipcMain.handle('file:follow-stop', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) throw new Error('Unable to resolve application window')
+    const windowRuntime = documentWindowRuntimeFor(window)
+    await windowRuntime.followPoll
+    windowRuntime.followReader = null
+    windowRuntime.externalChangePending = false
+    windowRuntime.pendingFileSignature = null
+    if (windowRuntime.watchedFilePath) {
+      windowRuntime.watchedFileSignature = fileSignature(windowRuntime.watchedFilePath)
+    }
   })
 
   ipcMain.handle('menu:context-state', (_event, state: MenuContextState) => {
@@ -1579,11 +1615,15 @@ app.whenReady().then(() => {
   )
 
   ipcMain.handle('file:external-change-handled', (event) => {
-    if (externalChangePending) watchedFileSignature = pendingFileSignature
-    externalChangePending = false
     const window = BrowserWindow.fromWebContents(event.sender)
-    if (window && watchedFilePath) {
-      watchFileDirectories(window, watchedFilePath)
+    if (!window) throw new Error('Unable to resolve application window')
+    const windowRuntime = documentWindowRuntimeFor(window)
+    if (windowRuntime.externalChangePending) {
+      windowRuntime.watchedFileSignature = windowRuntime.pendingFileSignature
+    }
+    windowRuntime.externalChangePending = false
+    if (windowRuntime.watchedFilePath) {
+      watchFileDirectories(window, windowRuntime.watchedFilePath)
       checkWatchedFile(window)
     }
   })
