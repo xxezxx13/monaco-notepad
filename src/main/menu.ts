@@ -40,9 +40,47 @@ const defaultMenuContextState: MenuContextState = {
 }
 
 const menuContextStates = new WeakMap<BrowserWindow, MenuContextState>()
+const documentWindows = new WeakSet<BrowserWindow>()
 
 function menuContextStateFor(window: BrowserWindow): MenuContextState {
   return menuContextStates.get(window) ?? defaultMenuContextState
+}
+
+function focusedDocumentWindow(): BrowserWindow | null {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused) {
+    if (focused.isDestroyed() || !documentWindows.has(focused)) return null
+    return focused
+  }
+
+  const documents = BrowserWindow.getAllWindows().filter(
+    (window) => !window.isDestroyed() && documentWindows.has(window)
+  )
+  return documents.length === 1 ? documents[0] : null
+}
+
+function availableDocumentWindow(): BrowserWindow | null {
+  const focused = focusedDocumentWindow()
+  if (focused) return focused
+
+  return (
+    BrowserWindow.getAllWindows().find(
+      (window) => !window.isDestroyed() && documentWindows.has(window)
+    ) ?? null
+  )
+}
+
+function sendToFocusedDocument(channel: string, ...args: unknown[]): void {
+  const window = focusedDocumentWindow()
+  if (!window) return
+  window.webContents.send(channel, ...args)
+}
+
+function sendToDocumentWindows(channel: string, ...args: unknown[]): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || !documentWindows.has(window)) continue
+    window.webContents.send(channel, ...args)
+  }
 }
 
 function menuCommandId(command: string): string {
@@ -132,6 +170,9 @@ export function activateMenuContextState(window: BrowserWindow): void {
   if (!menu) return
 
   applyMenuContextState(menu, menuContextStateFor(window))
+
+  const alwaysOnTopItem = menu.getMenuItemById('always-on-top')
+  if (alwaysOnTopItem) alwaysOnTopItem.checked = window.isAlwaysOnTop()
 }
 
 export function setMenuContextState(window: BrowserWindow, state: MenuContextState): void {
@@ -142,9 +183,10 @@ export function setMenuContextState(window: BrowserWindow, state: MenuContextSta
 }
 
 export function installMenu(window: BrowserWindow): void {
+  documentWindows.add(window)
   const recentFiles = existingRecentFiles()
   const sendEditorPreferences = (): void => {
-    window.webContents.send('menu:editor-preferences', {
+    sendToDocumentWindows('menu:editor-preferences', {
       trimTrailingWhitespaceOnSave: preferences.get('trimTrailingWhitespaceOnSave'),
       autoIndent: preferences.get('autoIndent'),
       tabSize: preferences.get('tabSize'),
@@ -156,7 +198,7 @@ export function installMenu(window: BrowserWindow): void {
     recentFiles.length > 0
       ? recentFiles.map((filePath) => ({
           label: filePath,
-          click: () => window.webContents.send('app:open-file-requested', filePath)
+          click: () => sendToFocusedDocument('app:open-file-requested', filePath)
         }))
       : [{ label: '(Empty)', enabled: false }]
 
@@ -167,7 +209,8 @@ export function installMenu(window: BrowserWindow): void {
       enabled: recentFiles.length > 0,
       click: () => {
         preferences.set('recentFiles', [])
-        installMenu(window)
+        const target = availableDocumentWindow()
+        if (target) installMenu(target)
       }
     }
   )
@@ -178,15 +221,15 @@ export function installMenu(window: BrowserWindow): void {
       submenu: [
         {
           ...shortcutMenuProperties('new'),
-          click: () => window.webContents.send('menu:command', 'new')
+          click: () => sendToFocusedDocument('menu:command', 'new')
         },
         {
           ...shortcutMenuProperties('open'),
-          click: () => window.webContents.send('menu:command', 'open')
+          click: () => sendToFocusedDocument('menu:command', 'open')
         },
         {
           label: 'Open as ANSI (Windows-1252)...',
-          click: () => window.webContents.send('menu:command', 'open-ansi')
+          click: () => sendToFocusedDocument('menu:command', 'open-ansi')
         },
         {
           label: 'Recent Files',
@@ -204,37 +247,37 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
           ...shortcutMenuProperties('reload'),
           id: menuCommandId('reload'),
-          click: () => window.webContents.send('menu:command', 'reload')
+          click: () => sendToFocusedDocument('menu:command', 'reload')
         },
         {
           label: 'Revert to Saved',
           id: menuCommandId('revert'),
-          click: () => window.webContents.send('menu:command', 'revert')
+          click: () => sendToFocusedDocument('menu:command', 'revert')
         },
         { type: 'separator' },
         {
           ...shortcutMenuProperties('save'),
           id: menuCommandId('save'),
-          click: () => window.webContents.send('menu:command', 'save')
+          click: () => sendToFocusedDocument('menu:command', 'save')
         },
         {
           ...shortcutMenuProperties('save-as'),
           id: menuCommandId('save-as'),
-          click: () => window.webContents.send('menu:command', 'save-as')
+          click: () => sendToFocusedDocument('menu:command', 'save-as')
         },
         {
           label: 'Save a Copy...',
-          click: () => window.webContents.send('menu:command', 'save-copy')
+          click: () => sendToFocusedDocument('menu:command', 'save-copy')
         },
         {
           ...shortcutMenuProperties('print'),
-          click: () => window.webContents.send('menu:command', 'print')
+          click: () => sendToFocusedDocument('menu:command', 'print')
         },
         { type: 'separator' },
         {
@@ -249,7 +292,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         { type: 'separator' },
@@ -262,7 +305,7 @@ export function installMenu(window: BrowserWindow): void {
         { type: 'separator' },
         {
           label: 'Exit',
-          click: () => window.close()
+          click: () => focusedDocumentWindow()?.close()
         }
       ]
     },
@@ -271,11 +314,11 @@ export function installMenu(window: BrowserWindow): void {
       submenu: [
         {
           ...shortcutMenuProperties('undo'),
-          click: () => window.webContents.send('menu:command', 'undo')
+          click: () => sendToFocusedDocument('menu:command', 'undo')
         },
         {
           ...shortcutMenuProperties('redo'),
-          click: () => window.webContents.send('menu:command', 'redo')
+          click: () => sendToFocusedDocument('menu:command', 'redo')
         },
         { type: 'separator' },
         { role: 'cut' },
@@ -284,7 +327,7 @@ export function installMenu(window: BrowserWindow): void {
         {
           label: 'Delete',
           id: menuCommandId('delete'),
-          click: () => window.webContents.send('menu:command', 'delete')
+          click: () => sendToFocusedDocument('menu:command', 'delete')
         },
         { type: 'separator' },
         {
@@ -308,7 +351,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
@@ -321,7 +364,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
@@ -333,7 +376,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
@@ -342,17 +385,17 @@ export function installMenu(window: BrowserWindow): void {
             {
               label: 'Format JSON',
               id: menuCommandId('transform:format-json'),
-              click: () => window.webContents.send('menu:command', 'transform:format-json')
+              click: () => sendToFocusedDocument('menu:command', 'transform:format-json')
             },
             {
               label: 'Minify JSON',
               id: menuCommandId('transform:minify-json'),
-              click: () => window.webContents.send('menu:command', 'transform:minify-json')
+              click: () => sendToFocusedDocument('menu:command', 'transform:minify-json')
             },
             {
               label: 'Format XML',
               id: menuCommandId('transform:format-xml'),
-              click: () => window.webContents.send('menu:command', 'transform:format-xml')
+              click: () => sendToFocusedDocument('menu:command', 'transform:format-xml')
             },
             { type: 'separator' },
             ...[
@@ -365,7 +408,7 @@ export function installMenu(window: BrowserWindow): void {
             ].map(([label, command]) => ({
               id: menuCommandId(command),
               label,
-              click: () => window.webContents.send('menu:command', command)
+              click: () => sendToFocusedDocument('menu:command', command)
             })),
             { type: 'separator' },
             {
@@ -376,7 +419,7 @@ export function installMenu(window: BrowserWindow): void {
               ].map(([label, command]) => ({
                 id: menuCommandId(command),
                 label,
-                click: () => window.webContents.send('menu:command', command)
+                click: () => sendToFocusedDocument('menu:command', command)
               }))
             },
             {
@@ -389,7 +432,7 @@ export function installMenu(window: BrowserWindow): void {
               ].map(([label, command]) => ({
                 id: menuCommandId(command),
                 label,
-                click: () => window.webContents.send('menu:command', command)
+                click: () => sendToFocusedDocument('menu:command', command)
               }))
             },
             { type: 'separator' },
@@ -402,7 +445,7 @@ export function installMenu(window: BrowserWindow): void {
               ].map(([label, command]) => ({
                 id: menuCommandId(command),
                 label,
-                click: () => window.webContents.send('menu:command', command)
+                click: () => sendToFocusedDocument('menu:command', command)
               }))
             }
           ]
@@ -410,45 +453,45 @@ export function installMenu(window: BrowserWindow): void {
         {
           label: 'Trim Trailing Whitespace',
           id: menuCommandId('trim-trailing-whitespace'),
-          click: () => window.webContents.send('menu:command', 'trim-trailing-whitespace')
+          click: () => sendToFocusedDocument('menu:command', 'trim-trailing-whitespace')
         },
         {
           ...shortcutMenuProperties('toggle-line-comment'),
           id: menuCommandId('toggle-line-comment'),
-          click: () => window.webContents.send('menu:command', 'toggle-line-comment')
+          click: () => sendToFocusedDocument('menu:command', 'toggle-line-comment')
         },
         {
           ...shortcutMenuProperties('matching-bracket'),
-          click: () => window.webContents.send('menu:command', 'matching-bracket')
+          click: () => sendToFocusedDocument('menu:command', 'matching-bracket')
         },
         { type: 'separator' },
         {
           ...shortcutMenuProperties('filter-lines'),
-          click: () => window.webContents.send('menu:command', 'filter-lines')
+          click: () => sendToFocusedDocument('menu:command', 'filter-lines')
         },
         {
           label: 'Regex Extract...',
-          click: () => window.webContents.send('menu:command', 'regex-extract')
+          click: () => sendToFocusedDocument('menu:command', 'regex-extract')
         },
         {
           ...shortcutMenuProperties('find'),
-          click: () => window.webContents.send('menu:command', 'find')
+          click: () => sendToFocusedDocument('menu:command', 'find')
         },
         {
           ...shortcutMenuProperties('find-next'),
-          click: () => window.webContents.send('menu:command', 'find-next')
+          click: () => sendToFocusedDocument('menu:command', 'find-next')
         },
         {
           ...shortcutMenuProperties('find-previous'),
-          click: () => window.webContents.send('menu:command', 'find-previous')
+          click: () => sendToFocusedDocument('menu:command', 'find-previous')
         },
         {
           ...shortcutMenuProperties('replace'),
-          click: () => window.webContents.send('menu:command', 'replace')
+          click: () => sendToFocusedDocument('menu:command', 'replace')
         },
         {
           ...shortcutMenuProperties('go-to'),
-          click: () => window.webContents.send('menu:command', 'go-to')
+          click: () => sendToFocusedDocument('menu:command', 'go-to')
         },
         { type: 'separator' },
         {
@@ -457,32 +500,32 @@ export function installMenu(window: BrowserWindow): void {
             {
               ...shortcutMenuProperties('bookmark-toggle'),
               id: menuCommandId('bookmark-toggle'),
-              click: () => window.webContents.send('menu:command', 'bookmark-toggle')
+              click: () => sendToFocusedDocument('menu:command', 'bookmark-toggle')
             },
             {
               ...shortcutMenuProperties('bookmark-next'),
-              click: () => window.webContents.send('menu:command', 'bookmark-next')
+              click: () => sendToFocusedDocument('menu:command', 'bookmark-next')
             },
             {
               ...shortcutMenuProperties('bookmark-previous'),
-              click: () => window.webContents.send('menu:command', 'bookmark-previous')
+              click: () => sendToFocusedDocument('menu:command', 'bookmark-previous')
             },
             {
               label: 'Clear All Bookmarks',
               id: menuCommandId('bookmark-clear'),
-              click: () => window.webContents.send('menu:command', 'bookmark-clear')
+              click: () => sendToFocusedDocument('menu:command', 'bookmark-clear')
             }
           ]
         },
         { type: 'separator' },
         {
           ...shortcutMenuProperties('select-all'),
-          click: () => window.webContents.send('menu:command', 'select-all')
+          click: () => sendToFocusedDocument('menu:command', 'select-all')
         },
         {
           ...shortcutMenuProperties('time-date'),
           id: menuCommandId('time-date'),
-          click: () => window.webContents.send('menu:command', 'time-date')
+          click: () => sendToFocusedDocument('menu:command', 'time-date')
         },
         { type: 'separator' },
         {
@@ -490,12 +533,12 @@ export function installMenu(window: BrowserWindow): void {
           ...shortcutMenuProperties('toggle-read-only'),
           type: 'checkbox',
           checked: false,
-          click: () => window.webContents.send('menu:command', 'toggle-read-only')
+          click: () => sendToFocusedDocument('menu:command', 'toggle-read-only')
         },
         { type: 'separator' },
         {
           ...shortcutMenuProperties('preferences'),
-          click: () => window.webContents.send('menu:command', 'preferences')
+          click: () => sendToFocusedDocument('menu:command', 'preferences')
         }
       ]
     },
@@ -508,7 +551,7 @@ export function installMenu(window: BrowserWindow): void {
           checked: preferences.get('wordWrap'),
           click: (item) => {
             preferences.set('wordWrap', item.checked)
-            window.webContents.send('menu:word-wrap', item.checked)
+            sendToDocumentWindows('menu:word-wrap', item.checked)
           }
         },
         {
@@ -596,7 +639,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
@@ -610,7 +653,7 @@ export function installMenu(window: BrowserWindow): void {
           ].map(([label, command]) => ({
             id: menuCommandId(command),
             label,
-            click: () => window.webContents.send('menu:command', command)
+            click: () => sendToFocusedDocument('menu:command', command)
           }))
         },
         {
@@ -618,11 +661,11 @@ export function installMenu(window: BrowserWindow): void {
           submenu: [
             {
               label: 'Normalize to LF',
-              click: () => window.webContents.send('menu:command', 'eol:LF')
+              click: () => sendToFocusedDocument('menu:command', 'eol:LF')
             },
             {
               label: 'Normalize to CRLF',
-              click: () => window.webContents.send('menu:command', 'eol:CRLF')
+              click: () => sendToFocusedDocument('menu:command', 'eol:CRLF')
             }
           ]
         },
@@ -632,12 +675,12 @@ export function installMenu(window: BrowserWindow): void {
             {
               label: 'Add Final Newline',
               id: menuCommandId('add-final-newline'),
-              click: () => window.webContents.send('menu:command', 'add-final-newline')
+              click: () => sendToFocusedDocument('menu:command', 'add-final-newline')
             },
             {
               label: 'Remove Final Newline',
               id: menuCommandId('remove-final-newline'),
-              click: () => window.webContents.send('menu:command', 'remove-final-newline')
+              click: () => sendToFocusedDocument('menu:command', 'remove-final-newline')
             }
           ]
         }
@@ -652,7 +695,7 @@ export function installMenu(window: BrowserWindow): void {
           type: 'checkbox',
           checked: false,
           enabled: false,
-          click: () => window.webContents.send('menu:command', 'follow-file')
+          click: () => sendToFocusedDocument('menu:command', 'follow-file')
         },
         {
           label: 'Typewriter Scrolling',
@@ -660,7 +703,7 @@ export function installMenu(window: BrowserWindow): void {
           checked: preferences.get('typewriterScrolling'),
           click: (item) => {
             preferences.set('typewriterScrolling', item.checked)
-            window.webContents.send('menu:typewriter-scrolling', item.checked)
+            sendToDocumentWindows('menu:typewriter-scrolling', item.checked)
           }
         },
         { type: 'separator' },
@@ -673,7 +716,7 @@ export function installMenu(window: BrowserWindow): void {
               checked: preferences.get('statusBarVisible'),
               click: (item) => {
                 preferences.set('statusBarVisible', item.checked)
-                window.webContents.send('menu:status-bar', item.checked)
+                sendToDocumentWindows('menu:status-bar', item.checked)
               }
             },
             { type: 'separator' },
@@ -704,7 +747,7 @@ export function installMenu(window: BrowserWindow): void {
           checked: preferences.get('showLineNumbers'),
           click: (item) => {
             preferences.set('showLineNumbers', item.checked)
-            window.webContents.send('menu:show-line-numbers', item.checked)
+            sendToDocumentWindows('menu:show-line-numbers', item.checked)
           }
         },
         {
@@ -713,15 +756,20 @@ export function installMenu(window: BrowserWindow): void {
           checked: preferences.get('showWhitespace'),
           click: (item) => {
             preferences.set('showWhitespace', item.checked)
-            window.webContents.send('menu:show-whitespace', item.checked)
+            sendToDocumentWindows('menu:show-whitespace', item.checked)
           }
         },
         { type: 'separator' },
         {
           label: 'Always on Top',
           type: 'checkbox',
+          id: 'always-on-top',
           checked: window.isAlwaysOnTop(),
-          click: (item) => window.setAlwaysOnTop(item.checked)
+          click: (item) => {
+            const target = focusedDocumentWindow()
+            if (!target) return
+            target.setAlwaysOnTop(item.checked)
+          }
         },
         {
           label: 'Large File Warning',
@@ -738,24 +786,26 @@ export function installMenu(window: BrowserWindow): void {
         {
           ...shortcutMenuProperties('full-screen'),
           click: () => {
-            const enabled = !window.isFullScreen()
-            window.setFullScreen(enabled)
-            window.setMenuBarVisibility(!enabled)
-            window.webContents.send('window:full-screen', enabled)
+            const target = focusedDocumentWindow()
+            if (!target) return
+            const enabled = !target.isFullScreen()
+            target.setFullScreen(enabled)
+            target.setMenuBarVisibility(!enabled)
+            target.webContents.send('window:full-screen', enabled)
           }
         },
         { type: 'separator' },
         {
           ...shortcutMenuProperties('zoom-in'),
-          click: () => window.webContents.send('menu:command', 'zoom-in')
+          click: () => sendToFocusedDocument('menu:command', 'zoom-in')
         },
         {
           ...shortcutMenuProperties('zoom-out'),
-          click: () => window.webContents.send('menu:command', 'zoom-out')
+          click: () => sendToFocusedDocument('menu:command', 'zoom-out')
         },
         {
           ...shortcutMenuProperties('zoom-reset'),
-          click: () => window.webContents.send('menu:command', 'zoom-reset')
+          click: () => sendToFocusedDocument('menu:command', 'zoom-reset')
         }
       ]
     },
@@ -764,13 +814,15 @@ export function installMenu(window: BrowserWindow): void {
       submenu: [
         {
           label: 'Keyboard Shortcuts',
-          click: () => window.webContents.send('menu:command', 'show-keyboard-shortcuts')
+          click: () => sendToFocusedDocument('menu:command', 'show-keyboard-shortcuts')
         },
         { type: 'separator' },
         {
           label: 'About Monaco Notepad',
           click: () => {
-            void dialog.showMessageBox(window, {
+            const owner = availableDocumentWindow()
+            if (!owner) return
+            void dialog.showMessageBox(owner, {
               type: 'info',
               title: 'About Monaco Notepad',
               message: 'Monaco Notepad',
