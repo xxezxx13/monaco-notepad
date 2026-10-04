@@ -56,6 +56,7 @@ import {
 import { createPortableSettingsFile, parsePortableSettingsJson } from './settings-portability'
 
 const approvedCloseWindows = new WeakSet<BrowserWindow>()
+const documentWindows = new Set<BrowserWindow>()
 let mainWindow: BrowserWindow | null = null
 let preferencesWindow: BrowserWindow | null = null
 let startupPendingFilePath: string | null = null
@@ -105,6 +106,21 @@ function documentWindowRuntimeFor(window: BrowserWindow): DocumentWindowRuntime 
   }
   return runtime
 }
+
+function firstLiveDocumentWindow(): BrowserWindow | null {
+  for (const window of documentWindows) {
+    if (!window.isDestroyed()) return window
+  }
+  return null
+}
+
+function broadcastToDocumentWindows(channel: string, ...args: unknown[]): void {
+  for (const window of documentWindows) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send(channel, ...args)
+  }
+}
+
 let recoveryErrorShown = false
 let recoveryWrite: Promise<void> = Promise.resolve()
 let portalMonitor: ReturnType<typeof spawn> | null = null
@@ -189,7 +205,7 @@ function beginOpenRequest(
 function sendPortalTheme(theme: PortalTheme): void {
   if (preferences.get('theme') !== 'system') return
 
-  mainWindow?.webContents.send('theme:portal-changed', theme)
+  broadcastToDocumentWindows('theme:portal-changed', theme)
   preferencesWindow?.webContents.send('theme:portal-changed', theme)
 }
 
@@ -619,7 +635,8 @@ function createWindow(): void {
       spellcheck: false
     }
   })
-  mainWindow = window
+  documentWindows.add(window)
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = window
   traceStartup('window-construction-end', { webContentsId: window.webContents.id })
 
   const windowRuntime = documentWindowRuntimeFor(window)
@@ -689,7 +706,8 @@ function createWindow(): void {
     traceStartup('window-closed')
     stopWatchingFile(window)
     windowRuntime.rendererReady = false
-    if (mainWindow === window) mainWindow = null
+    documentWindows.delete(window)
+    if (mainWindow === window) mainWindow = firstLiveDocumentWindow()
   })
 
   // Chromium consumes standard Ctrl++ / Ctrl+- editor zoom chords before
@@ -745,7 +763,7 @@ app.whenReady().then(() => {
   nativeTheme.on('updated', () => {
     if (preferences.get('theme') !== 'system') return
 
-    mainWindow?.webContents.send('theme:system-changed')
+    broadcastToDocumentWindows('theme:system-changed')
     preferencesWindow?.webContents.send('theme:system-changed')
   })
   queryPortalTheme()
@@ -796,9 +814,7 @@ app.whenReady().then(() => {
       nativeTheme.themeSource = value
     }
 
-    if (mainWindow) {
-      mainWindow.webContents.send('preferences:changed', { [key]: value })
-    }
+    broadcastToDocumentWindows('preferences:changed', { [key]: value })
     if (preferencesWindow) {
       preferencesWindow.webContents.send('preferences:changed', { [key]: value })
     }
@@ -816,9 +832,7 @@ app.whenReady().then(() => {
       'largeFileWarningMiB',
       'theme'
     ]
-    if (menuKeys.includes(key)) {
-      installMenu(mainWindow!)
-    }
+    if (menuKeys.includes(key) && mainWindow) installMenu(mainWindow)
   })
 
   ipcMain.handle('preferences:export', async (event) => {
@@ -873,7 +887,7 @@ app.whenReady().then(() => {
     nativeTheme.themeSource = document.preferences.theme
 
     if (mainWindow) installMenu(mainWindow)
-    mainWindow?.webContents.send('preferences:imported')
+    broadcastToDocumentWindows('preferences:imported')
     preferencesWindow?.webContents.send('preferences:imported')
 
     return 'imported'
