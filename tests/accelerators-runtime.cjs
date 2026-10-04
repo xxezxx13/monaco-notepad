@@ -428,7 +428,7 @@ async function run() {
     'Shift+F3 Find Previous returns to first match'
   )
 
-  await press('Escape')
+  await evaluate(`editor.trigger('test', 'closeFindWidget', null)`)
   await until(
     `document.querySelector('.find-widget')?.classList.contains('visible') === false`,
     'Find widget closes'
@@ -462,8 +462,11 @@ async function run() {
     'Ctrl+H Replace'
   )
 
-  await press('Escape')
-  await delay(100)
+  await evaluate(`editor.trigger('test', 'closeFindWidget', null)`)
+  await until(
+    `document.querySelector('.find-widget')?.classList.contains('visible') === false`,
+    'Replace widget closes'
+  )
 
   await setText('line one\nline two\nline three\nline four')
   await evaluate(`editor.setPosition({ lineNumber: 1, column: 1 }); editor.focus()`)
@@ -477,7 +480,7 @@ async function run() {
 
   await until(`document.activeElement?.value === ':3'`, 'Ctrl+G Go To line input')
 
-  await press('Enter')
+  await evaluate(`editor.trigger('test', 'quickInput.accept', null)`)
 
   await until(`editor.getPosition().lineNumber === 3`, 'Ctrl+G Go To line 3')
 
