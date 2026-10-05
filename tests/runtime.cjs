@@ -11,6 +11,28 @@ const vm = require('node:vm')
 const ts = require('typescript')
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const originalRuntimeOpen = fs.open.bind(fs)
+let delayedReadPath
+
+fs.open = async (...args) => {
+  const handle = await originalRuntimeOpen(...args)
+  if (args[0] === delayedReadPath) {
+    return new Proxy(handle, {
+      get(target, property) {
+        if (property === "read") {
+          return async (...readArgs) => {
+            await delay(15)
+            return target.read(...readArgs)
+          }
+        }
+        const value = target[property]
+        return typeof value === "function" ? value.bind(target) : value
+      }
+    })
+  }
+  return handle
+}
+
 
 function processResourceSnapshot() {
   const fdDirectory = `/proc/${process.pid}/fd`
@@ -133,6 +155,45 @@ async function clickSubmenu(parentLabel, childLabel) {
   assert.ok(item, `Menu: ${parentLabel} > ${childLabel}`)
   item.click(item, window)
   await delay(150)
+}
+
+async function openAndAdoptNewWindow({ adopt = true } = {}) {
+  const sourceWindow = window
+  const existingIds = new Set(BrowserWindow.getAllWindows().map((candidate) => candidate.id))
+  await click("Open...")
+
+  let openedWindow
+
+  for (let attempt = 0; attempt < 160; attempt++) {
+    openedWindow = BrowserWindow.getAllWindows().find(
+      (candidate) => existingIds.has(candidate.id) === false
+    )
+
+    if (openedWindow && openedWindow.webContents.isLoading() === false) break
+    await delay(25)
+  }
+
+  assert.ok(openedWindow, "new document window")
+  window = openedWindow
+
+  await until(
+    `typeof window.api === "object" && performance.getEntriesByType("resource").some(e => /monaco-editor.*editor.*api/.test(e.name))`,
+    "new document editor module"
+  )
+
+  await evaluate(`(async () => {
+    const url = performance.getEntriesByType("resource").find(e => /monaco-editor.*editor.*api/.test(e.name)).name;
+    window.monaco = await import(url);
+    window.editor = monaco.editor.getEditors()[0];
+  })()`)
+
+  await until(`typeof window.editor === "object"`, "new document editor startup")
+  if (adopt) {
+    sourceWindow.destroy()
+  } else {
+    window = sourceWindow
+  }
+  return openedWindow
 }
 
 async function setText(text) {
@@ -1362,7 +1423,7 @@ async function run() {
   await fs.writeFile(reopenEncodingPath, 'café', 'utf8')
   openPath = reopenEncodingPath
   response = 0
-  await click('Open...')
+  await openAndAdoptNewWindow()
   await until(
     `document.title === 'reopen-encoding.txt - Monaco Notepad' && editor.getValue() === 'café'`,
     'UTF-8 reopen fixture open'
@@ -1402,7 +1463,7 @@ async function run() {
 
   openPath = mixedEolPath
   response = 0
-  await click('Open...')
+  await openAndAdoptNewWindow()
   await until(
     `document.title === 'mixed-eol.txt - Monaco Notepad' && document.getElementById('eol').value === 'Mixed'`,
     'mixed EOL source status'
@@ -1518,7 +1579,7 @@ async function run() {
 
   openPath = crEolPath
   response = 0
-  await click('Open...')
+  await openAndAdoptNewWindow()
   await until(
     `document.title === 'cr-eol.txt - Monaco Notepad' && document.getElementById('eol').value === 'CR'`,
     'CR source status'
@@ -1555,17 +1616,23 @@ async function run() {
 
   response = 1
 
-  await click('Open...')
+  const rejectedSafeOpenWindow = await openAndAdoptNewWindow({ adopt: false })
 
   assert.equal(await evaluate('editor.getValue()'), valueBeforeSafeOpen)
 
   assert.equal(await evaluate('document.title'), titleBeforeSafeOpen)
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (messages.some((message) => message.title === 'Likely Binary File')) break
+    await delay(50)
+  }
 
   assert.ok(messages.some((message) => message.title === 'Likely Binary File'))
+  if (rejectedSafeOpenWindow.isDestroyed() === false) rejectedSafeOpenWindow.destroy()
+  await delay(50)
 
   response = 0
 
-  await click('Open...')
+  await openAndAdoptNewWindow()
 
   await until(`document.title === 'binary.dat - Monaco Notepad'`, 'Safe Open binary document')
 
@@ -1941,7 +2008,7 @@ async function run() {
 
   openPath = typewriterPositionPath
   response = 1
-  await click('Open...')
+  await openAndAdoptNewWindow()
   await until(
     `document.title === 'typewriter-position.txt - Monaco Notepad'`,
     'Typewriter stored-position fixture open'
@@ -1962,7 +2029,7 @@ async function run() {
   )
   openPath = followedPath
   response = 0
-  await click('Open...')
+  await openAndAdoptNewWindow()
   await until(`document.title === 'follow.log - Monaco Notepad'`, 'follow fixture open')
   await setText('dirty follow guard')
   response = 2
@@ -2232,9 +2299,18 @@ async function run() {
   assert.equal(Buffer.byteLength(largeFileText), largeFileSize)
   await fs.writeFile(openPath, largeFileText)
   response = 1
-  await click('Open...')
+  const rejectedLargeFileWindow = await openAndAdoptNewWindow({ adopt: false })
   assert.equal(await evaluate('editor.getValue()'), valueBeforeLargeFilePrompt)
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (messages.some((m) => /large/i.test(m.title || m.message))) break
+    await delay(50)
+  }
   assert.ok(messages.some((m) => /large/i.test(m.title || m.message)))
+  if (rejectedLargeFileWindow.isDestroyed() === false) rejectedLargeFileWindow.destroy()
+  await delay(50)
+  delayedReadPath = openPath
+  response = 0
+  await openAndAdoptNewWindow()
   await evaluate(`(() => {
       window.__phase10OpenFocus = {
         read: null,
@@ -2289,8 +2365,6 @@ async function run() {
       })
       window.__phase10OpenFocusObserver = observer
     })()`)
-  response = 0
-  await click('Open...')
   await until(
     `(() => {
       const detail = document.getElementById('open-progress-detail').innerText
@@ -2344,6 +2418,7 @@ async function run() {
     await evaluate(`document.getElementById('transient-status').innerText`),
     /Large File Mode/
   )
+  await setRegexExtractControls({ pattern: 'x', captureGroup: 0 })
   await click('Regex Extract...')
   await until(
     `!document.getElementById('regex-extract').hidden`,

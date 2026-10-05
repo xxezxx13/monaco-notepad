@@ -2882,6 +2882,12 @@ languageStatus.addEventListener('change', () => {
   setLanguage(languageStatus.value)
 })
 
+window.api.onOpenFileInNewWindowRequested((filePath, encoding) => {
+  runDocumentAction(async () => {
+    await window.api.openFilePathInNewWindow(filePath, encoding)
+  })
+})
+
 window.api.onOpenFileRequested((filePath, encoding) => {
   runDocumentAction(() => openFile(filePath, encoding))
 })
@@ -3078,10 +3084,14 @@ window.api.onMenuCommand((command) => {
       runDocumentAction(newDocument)
       break
     case 'open':
-      runDocumentAction(() => openFile())
+      runDocumentAction(async () => {
+        await window.api.openFileInNewWindow()
+      })
       break
     case 'open-ansi':
-      runDocumentAction(() => openFile(undefined, 'windows1252'))
+      runDocumentAction(async () => {
+        await window.api.openFileInNewWindow('windows1252')
+      })
       break
     case 'reopen-encoding:utf8':
     case 'reopen-encoding:utf8-bom':
@@ -3397,11 +3407,15 @@ window.addEventListener('dragover', (event) => {
 
 window.addEventListener('drop', (event) => {
   const file = event.dataTransfer?.files[0]
-  if (!file) return
+  if (file === undefined) return
 
   event.preventDefault()
   const filePath = window.api.getPathForFile(file)
-  if (filePath) runDocumentAction(() => openFile(filePath))
+  if (filePath.length > 0) {
+    runDocumentAction(async () => {
+      await window.api.openFilePathInNewWindow(filePath)
+    })
+  }
 })
 
 window.addEventListener('focus', () => {

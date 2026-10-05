@@ -1,7 +1,7 @@
 // Exercises responsive large-file loading through the real sandboxed renderer.
 // Native dialogs are answered deterministically; no personal files are touched.
 /* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, Menu } = require('electron')
+const { app, BrowserWindow, dialog } = require('electron')
 const assert = require('node:assert/strict')
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -61,18 +61,36 @@ async function until(code, description) {
   throw new Error(`Timed out: ${description}`)
 }
 
-function menuItem(label, menu = Menu.getApplicationMenu()) {
-  for (const item of menu.items) {
-    if (item.label === label) return item
-    const nested = item.submenu && menuItem(label, item.submenu)
-    if (nested) return nested
-  }
-}
 
-async function openFromMenu() {
-  const item = menuItem('Open...')
-  assert.ok(item, 'Open menu item')
-  item.click(item, window)
+async function openInNewWindow() {
+  const existingIds = new Set(BrowserWindow.getAllWindows().map((candidate) => candidate.id))
+  await evaluate("window.api.openFileInNewWindow()")
+
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const openedWindow = BrowserWindow.getAllWindows().find(
+      (candidate) => !existingIds.has(candidate.id)
+    )
+
+    if (openedWindow && !openedWindow.webContents.isLoading()) {
+      window = openedWindow
+
+      await until(
+        `!!window.api && performance.getEntriesByType("resource").some(e => /monaco-editor.*editor.*api/.test(e.name))`,
+        "new document editor module"
+      )
+      await evaluate(`(async () => {
+        const url = performance.getEntriesByType("resource").find(e => /monaco-editor.*editor.*api/.test(e.name)).name;
+        window.monaco = await import(url);
+        window.editor = monaco.editor.getEditors()[0];
+      })()`)
+      await until(`!!window.editor`, "new document editor startup")
+      return
+    }
+
+    await delay(25)
+  }
+
+  throw new Error("Timed out: new document window")
 }
 
 async function run() {
@@ -109,9 +127,10 @@ async function run() {
   })()`)
   await until(`!!window.editor`, 'editor startup')
   openPath = path.join(temporary, 'large.txt')
+  delayedReadPath = openPath
   await fs.writeFile(openPath, 'x'.repeat(20 * 1024 * 1024))
 
-  await openFromMenu()
+  await openInNewWindow()
   await until(
     `!document.getElementById('open-progress-dialog').hidden &&
       !document.getElementById('open-progress-cancel').disabled`,
@@ -140,7 +159,7 @@ async function run() {
   assert.equal(await evaluate(`editor.getValue()`), '')
   assert.equal(await evaluate(`document.title`), 'Untitled - Monaco Notepad')
 
-  await openFromMenu()
+  await openInNewWindow()
   await until(
     `editor.getModel().getValueLength() === 20 * 1024 * 1024`,
     'large file opened in full'
@@ -162,7 +181,7 @@ async function run() {
   delayedReadCount = 0
   delayedCloseCount = 0
 
-  await openFromMenu()
+  await openInNewWindow()
   await until(
     `!document.getElementById('open-progress-dialog').hidden &&
       !document.getElementById('open-progress-cancel').disabled`,
@@ -172,9 +191,7 @@ async function run() {
   assert.ok(delayedReadCount > 0)
   const readsAtDestroy = delayedReadCount
 
-  // Keep this test process alive after destroying its only BrowserWindow so
-  // request-owner destruction can be observed from the main process.
-  app.removeAllListeners('window-all-closed')
+  // Destroy the request-owning document window while its delayed read is active.
   window.destroy()
 
   for (let attempt = 0; attempt < 100 && delayedCloseCount === 0; attempt++) {

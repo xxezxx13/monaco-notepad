@@ -140,6 +140,14 @@ const api = {
 
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
+  openFileInNewWindow: (encoding: BomlessFileEncoding = 'auto'): Promise<void> =>
+    ipcRenderer.invoke('file:open-new-window', encoding),
+
+  openFilePathInNewWindow: (
+    filePath: string,
+    encoding: BomlessFileEncoding = 'auto'
+  ): Promise<void> => ipcRenderer.invoke('file:open-path-new-window', filePath, encoding),
+
   openFile: (encoding: BomlessFileEncoding = 'auto', requestId?: string): Promise<OpenFileResult> =>
     ipcRenderer.invoke('file:open', encoding, requestId),
 
@@ -258,6 +266,19 @@ const api = {
   },
 
   approveClose: (): Promise<void> => ipcRenderer.invoke('app:close-approved'),
+
+  onOpenFileInNewWindowRequested: (
+    callback: (filePath: string, encoding?: BomlessFileEncoding) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      filePath: string,
+      encoding?: BomlessFileEncoding
+    ): void => callback(filePath, encoding)
+
+    ipcRenderer.on('app:open-file-in-new-window-requested', listener)
+    return () => ipcRenderer.removeListener('app:open-file-in-new-window-requested', listener)
+  },
 
   onOpenFileRequested: (
     callback: (filePath: string, encoding?: BomlessFileEncoding) => void

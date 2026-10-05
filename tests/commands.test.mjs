@@ -61,53 +61,37 @@ test('command and shortcut registries are unique and internally consistent', () 
   )
 })
 
-test('drag and drop reuses the guarded open-file pipeline', async () => {
-  const [rendererSource, preloadSource] = await Promise.all([
+test('user-level file opens route to new document windows', async () => {
+  const [rendererSource, preloadSource, menuSource] = await Promise.all([
     readFile(rendererPath, 'utf8'),
-    readFile(preloadPath, 'utf8')
+    readFile(preloadPath, 'utf8'),
+    readFile(menuPath, 'utf8')
   ])
 
-  const dragoverBlock = `window.addEventListener('dragover', (event) => {
-  if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
-})`
-
-  const dropBlock = `window.addEventListener('drop', (event) => {
-  const file = event.dataTransfer?.files[0]
-  if (!file) return
-
-  event.preventDefault()
-  const filePath = window.api.getPathForFile(file)
-  if (filePath) runDocumentAction(() => openFile(filePath))
-})`
-
-  assert.equal(
-    rendererSource.split("window.addEventListener('dragover'").length - 1,
-    1,
-    'Renderer must have exactly one file dragover owner'
-  )
-  assert.equal(
-    rendererSource.split("window.addEventListener('drop'").length - 1,
-    1,
-    'Renderer must have exactly one file drop owner'
-  )
-  assert.ok(rendererSource.includes(dragoverBlock))
-  assert.ok(rendererSource.includes(dropBlock))
-
-  assert.ok(
-    preloadSource.includes('getPathForFile: (file: File): string => webUtils.getPathForFile(file)'),
-    'Dropped File objects must be resolved through Electron webUtils'
-  )
+  assert.match(preloadSource, /openFileInNewWindow:/)
+  assert.match(preloadSource, /openFilePathInNewWindow:/)
+  assert.match(preloadSource, /onOpenFileInNewWindowRequested:/)
 
   assert.match(
     rendererSource,
-    /async function openFile\([\s\S]*?if \(!\(await confirmUnsavedChanges\(\)\)\) \{[\s\S]*?window\.api\.openFilePath\(filePath, bomlessEncoding, requestId\)/,
-    'Dropped files must retain dirty-buffer confirmation and the normal openFilePath IPC pipeline'
+    /case 'open':[\s\S]*?openFileInNewWindow\(\)/
+  )
+  assert.match(
+    rendererSource,
+    /case 'open-ansi':[\s\S]*?openFileInNewWindow\('windows1252'\)/
+  )
+  assert.match(
+    rendererSource,
+    /window\.addEventListener\('drop'[\s\S]*?openFilePathInNewWindow\(filePath\)/
+  )
+  assert.doesNotMatch(
+    rendererSource,
+    /if \(filePath\) runDocumentAction\(\(\) => openFile\(filePath\)\)/
   )
 
-  assert.doesNotMatch(
-    dropBlock,
-    /readFile|openFilePath|ipcRenderer|fs\./,
-    'Drop handling must not create a parallel file-reading or IPC path'
+  assert.match(
+    menuSource,
+    /sendToFocusedDocument\('app:open-file-in-new-window-requested', filePath\)/
   )
 })
 

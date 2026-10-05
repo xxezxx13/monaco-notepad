@@ -198,7 +198,7 @@ export function installMenu(window: BrowserWindow): void {
     recentFiles.length > 0
       ? recentFiles.map((filePath) => ({
           label: filePath,
-          click: () => sendToFocusedDocument('app:open-file-requested', filePath)
+          click: () => sendToFocusedDocument('app:open-file-in-new-window-requested', filePath)
         }))
       : [{ label: '(Empty)', enabled: false }]
 

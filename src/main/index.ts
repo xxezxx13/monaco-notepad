@@ -19,6 +19,7 @@ import { optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
   openFileDialog,
+  selectOpenFilePath,
   openFilePath,
   reopenFilePath,
   saveFile,
@@ -83,6 +84,7 @@ interface DocumentWindowRuntime {
   sessionOwner: boolean
   rendererReady: boolean
   pendingFilePath: string | null
+  pendingFileEncoding: BomlessFileEncoding
 }
 
 const documentWindowRuntimes = new WeakMap<BrowserWindow, DocumentWindowRuntime>()
@@ -102,7 +104,8 @@ function documentWindowRuntimeFor(window: BrowserWindow): DocumentWindowRuntime 
       followPoll: Promise.resolve(),
       sessionOwner: false,
       rendererReady: false,
-      pendingFilePath: null
+      pendingFilePath: null,
+      pendingFileEncoding: 'auto'
     }
     documentWindowRuntimes.set(window, runtime)
   }
@@ -500,22 +503,12 @@ function filePathFromArguments(argv: string[], workingDirectory = process.cwd())
 }
 
 function requestFileOpen(filePath: string): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  if (mainWindow === null || mainWindow.isDestroyed()) {
     startupPendingFilePath = filePath
     return
   }
 
-  const windowRuntime = documentWindowRuntimeFor(mainWindow)
-  windowRuntime.pendingFilePath = filePath
-
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
-
-  if (!mainWindow.webContents.isLoading() && windowRuntime.rendererReady) {
-    windowRuntime.pendingFilePath = null
-    mainWindow.webContents.send('app:open-file-requested', filePath)
-  }
+  createWindow(false, filePath)
 }
 
 traceStartup('single-instance-lock-attempt')
@@ -615,7 +608,11 @@ function createPreferencesWindow(): void {
   }
 }
 
-function createWindow(sessionOwner = false, initialFilePath: string | null = null): void {
+function createWindow(
+  sessionOwner = false,
+  initialFilePath: string | null = null,
+  initialFileEncoding: BomlessFileEncoding = 'auto'
+): void {
   traceStartup('window-construction-begin')
 
   // Create the browser window.
@@ -644,6 +641,7 @@ function createWindow(sessionOwner = false, initialFilePath: string | null = nul
   const windowRuntime = documentWindowRuntimeFor(window)
   windowRuntime.sessionOwner = sessionOwner
   windowRuntime.pendingFilePath = initialFilePath
+  windowRuntime.pendingFileEncoding = initialFileEncoding
 
   window.on('ready-to-show', () => {
     traceStartup('ready-to-show')
@@ -988,8 +986,10 @@ app.whenReady().then(() => {
     }
     if (windowRuntime.pendingFilePath) {
       const filePath = windowRuntime.pendingFilePath
+      const encoding = windowRuntime.pendingFileEncoding
       windowRuntime.pendingFilePath = null
-      window.webContents.send('app:open-file-requested', filePath)
+      windowRuntime.pendingFileEncoding = 'auto'
+      window.webContents.send('app:open-file-requested', filePath, encoding)
     } else if (
       windowRuntime.sessionOwner &&
       !recoveryRestored &&
@@ -1011,6 +1011,33 @@ app.whenReady().then(() => {
       }
     }
   })
+
+  ipcMain.handle(
+    'file:open-new-window',
+    async (event, bomlessEncoding: BomlessFileEncoding = 'auto'): Promise<void> => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      if (window === null || window === preferencesWindow) {
+        throw new Error('Unable to resolve document window')
+      }
+
+      const filePath = await selectOpenFilePath(window)
+      if (filePath === null) return
+
+      createWindow(false, filePath, bomlessEncoding)
+    }
+  )
+
+  ipcMain.handle(
+    'file:open-path-new-window',
+    (event, filePath: string, bomlessEncoding: BomlessFileEncoding = 'auto'): void => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      if (window === null || window === preferencesWindow) {
+        throw new Error('Unable to resolve document window')
+      }
+
+      createWindow(false, filePath, bomlessEncoding)
+    }
+  )
 
   ipcMain.handle(
     'file:open',

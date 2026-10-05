@@ -225,7 +225,7 @@ test('privileged renderer windows share one deny-in-app navigation policy', () =
 
   assert.deepEqual(
     argumentsUsed.sort(),
-    ['mainWindow', 'preferencesWindow'],
-    'Main and Preferences windows must both install the shared navigation policy'
+    ['preferencesWindow', 'window'],
+    'Document and Preferences windows must both install the shared navigation policy'
   )
 })

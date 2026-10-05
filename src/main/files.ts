@@ -775,11 +775,7 @@ function modelEolFromSource(sourceEol: FileEolInfo): FileEol {
   return sourceEol.counts.crlf > 0 ? 'CRLF' : 'LF'
 }
 
-export async function openFileDialog(
-  window: BrowserWindow,
-  bomlessEncoding: BomlessFileEncoding = 'auto',
-  options: OpenFileReadOptions = {}
-): Promise<OpenFileResult | null> {
+export async function selectOpenFilePath(window: BrowserWindow): Promise<string | null> {
   const lastDirectory = preferences.get('lastDirectory')
 
   const result = await dialog.showOpenDialog(window, {
@@ -787,12 +783,20 @@ export async function openFileDialog(
     ...(lastDirectory ? { defaultPath: lastDirectory } : {})
   })
 
-  if (result.canceled || result.filePaths.length === 0) {
-    return null
-  }
+  if (result.canceled || result.filePaths.length === 0) return null
 
   const filePath = result.filePaths[0]
   preferences.set('lastDirectory', dirname(filePath))
+  return filePath
+}
+
+export async function openFileDialog(
+  window: BrowserWindow,
+  bomlessEncoding: BomlessFileEncoding = 'auto',
+  options: OpenFileReadOptions = {}
+): Promise<OpenFileResult | null> {
+  const filePath = await selectOpenFilePath(window)
+  if (filePath === null) return null
 
   return openFilePath(filePath, bomlessEncoding, window, options)
 }

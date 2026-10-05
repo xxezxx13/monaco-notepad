@@ -111,6 +111,46 @@ async function untilMain(predicate, description, timeoutMs = 6000) {
   throw new Error(`Timed out: ${description}`)
 }
 
+async function openShortcutAndAdoptNewWindow() {
+  const sourceWindow = window
+  const existingIds = new Set(BrowserWindow.getAllWindows().map((candidate) => candidate.id))
+
+  await pressShortcut('open')
+
+  let openedWindow
+
+  for (let attempt = 0; attempt < 160; attempt++) {
+    openedWindow = BrowserWindow.getAllWindows().find(
+      (candidate) => existingIds.has(candidate.id) === false
+    )
+
+    if (openedWindow && openedWindow.webContents.isLoading() === false) break
+    await delay(25)
+  }
+
+  assert.ok(openedWindow, "Ctrl+O document window")
+  window = openedWindow
+
+  await until(
+    `!!window.api && performance.getEntriesByType("resource").some(
+      (entry) => /monaco-editor.*editor.*api/.test(entry.name)
+    )`,
+    "Ctrl+O Monaco editor module"
+  )
+
+  await evaluate(`(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find((entry) => /monaco-editor.*editor.*api/.test(entry.name)).name
+
+    window.monaco = await import(url)
+    window.editor = monaco.editor.getEditors()[0]
+  })()`)
+
+  await until(`!!window.editor`, "Ctrl+O editor startup")
+  sourceWindow.destroy()
+}
+
 async function setText(text) {
   await evaluate(`editor.setValue(${JSON.stringify(text)})`)
   await delay(150)
@@ -297,7 +337,7 @@ async function run() {
   await fs.writeFile(openPath, 'opened by Ctrl+O', 'utf8')
   response = 0
 
-  await pressShortcut('open')
+  await openShortcutAndAdoptNewWindow()
   await until(
     `editor.getValue() === 'opened by Ctrl+O' &&
       document.title === 'accelerator-open.txt - Monaco Notepad'`,
