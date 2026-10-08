@@ -2,30 +2,29 @@
 
 ![Monaco Notepad](docs/screenshots/monaco-notepad.png)
 
-A minimal, single-document Linux desktop text editor built with Electron, Monaco Editor, and TypeScript. It is syntax-aware, but intentionally not an IDE.
+A minimal, single-document-per-window Linux desktop text editor built with Electron, Monaco Editor, and TypeScript. It is syntax-aware, but intentionally not an IDE.
 
 ## Version
 
-**Monaco Notepad v5**
+**Monaco Notepad v6**
 
-v5 is the current release of Monaco Notepad.
+v6 is the current release of Monaco Notepad.
 
-## What's new in v5
+## What's new in v6
 
-- Hardened Flatpak startup visibility with a renderer-ready fallback when `ready-to-show` is not delivered
-- Added opt-in local startup tracing for deterministic startup diagnosis without telemetry or network reporting
-- Strengthened external file-change conflict handling for modified, replaced, and deleted files
-- Added exact save-byte regression coverage for UTF-8, UTF-8 BOM, UTF-16 LE/BE, and Windows-1252
-- Expanded Find Next, Find Previous, wraparound, and Go To Line runtime coverage
-- Distinguished persistent scratchpad restoration from recovered-file sessions
-- Added versioned JSON settings export/import while preserving machine-local state
-- Improved keyboard focus containment and restoration across dialogs and large-file progress UI
-- Added deterministic Compare Against Disk resource-lifecycle guards for Monaco models, windows, and inotify descriptors
-- Established measured startup and resource baselines without adding telemetry or speculative performance changes
+- Upgraded Monaco Editor to 0.57.0.
+- Added multiple independent document windows while retaining one document per window and no tabs.
+- Opening another file from a window that already has a file open creates a separate document window.
+- Isolated save baselines, file monitoring, Follow File, menu routing, and document-window lifecycle state.
+- Preserved startup-window ownership of recovery and scratchpad restoration.
+- Improved native Flatpak Light/Dark title-bar and menu alignment at application startup.
+- Native Flatpak chrome applies a newly selected Light/Dark theme after restarting; the editor updates immediately.
+- Updated offline Flatpak dependencies to match Monaco Editor 0.57.0 and DOMPurify 3.4.15.
+- Expanded real Electron runtime coverage for simultaneous document windows and independent operations.
 
 ## Features
 
-- Single-document editing
+- One document per window, with multiple independent document windows and no tabs
 - Light, dark, and system themes
 - Monaco Editor syntax highlighting
 - Open, Save, and Save As
@@ -51,7 +50,8 @@ v5 is the current release of Monaco Notepad.
 - Selection SHA-256 plus explicitly labeled legacy SHA-1 and MD5 checksums
 - Configurable tab width, spaces/tabs insertion, and plain/basic auto indentation
 - Clickable encoding and line-ending controls
-- Command-line and desktop file opening in the existing window
+- Command-line and desktop file opening
+- Opening another file from a file-backed document window creates a separate window
 - External file-change detection with guarded reload
 - Minimal crash recovery for unsaved text
 - Native Recent Files menu
@@ -191,8 +191,8 @@ to desktop shortcut conflicts.
 
 ## Recovery and file monitoring
 
-Only the current document is monitored. External changes prompt before reload,
-and unsaved text is periodically written to one atomic recovery file in
+Each document window monitors its own opened file. External changes prompt before reload,
+and only the startup window periodically writes unsaved text to one atomic recovery file in
 Electron's user-data directory. Recovery never overwrites the original file;
 the user must explicitly save restored text.
 

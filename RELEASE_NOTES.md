@@ -1,82 +1,74 @@
-# Monaco Notepad v5 Release Notes
+# Monaco Notepad v6 Release Notes
 
-Monaco Notepad v5 focuses on startup reliability, file-safety clarity, settings portability, accessibility, resource integrity, and release confidence. It builds on the V4 interaction and security architecture without expanding Monaco Notepad beyond its focused single-document editor scope.
+Monaco Notepad v6 introduces independent document windows, upgrades Monaco Editor to 0.57.0, and improves native Flatpak theme alignment. It preserves the focused, single-document-per-window design and existing file-safety protections.
 
-## Startup reliability
+## Multi-window document editing
 
-- Hardened Flatpak startup visibility for cases where Electron does not deliver `ready-to-show`.
-- Added a renderer-ready IPC fallback so a successfully loaded editor cannot remain indefinitely hidden.
-- Added opt-in local JSONL startup tracing through `MONACO_NOTEPAD_STARTUP_TRACE`.
-- Kept startup diagnostics local, content-free, and independent of telemetry or network reporting.
-- Added deterministic startup coverage for explicit-file, recovery, scratchpad, last-document, missing-file, invalid-state, save-cleanup, and visibility-fallback paths.
+- Added support for multiple independent document windows without introducing tabs or workspace management.
+- Opening another file from a window that already contains a file-backed document creates a separate document window instead of replacing the open file.
+- Each editor window continues to contain at most one document.
+- Document windows maintain independent lifecycle, renderer readiness, and pending-open state.
+- Closing an individual document window does not require closing other document windows.
 
-## External file conflict safety
+## Per-window file and save isolation
 
-- Hardened handling for files modified, replaced, or deleted outside Monaco Notepad.
-- Revalidated disk identity before destructive save decisions.
-- Kept dirty buffers protected while exposing explicit Keep Editing, Compare Against Disk, Save As, and Overwrite choices where appropriate.
-- Preserved the current buffer while comparing against changed disk contents.
-- Prevented ordinary Save from silently recreating a deleted original path.
+- Isolated save baselines and external file-change monitoring for individual document windows.
+- Scoped file watchers, external-change notifications, and Follow File operations to their respective windows.
+- Updated native menu routing so document operations target the appropriate focused window.
+- Hardened menu behavior when the desktop does not report a focused native window.
+- Preserved independent document editing while keeping Preferences separate from document windows.
 
-## Encoding and line-ending integrity
+## Startup and recovery ownership
 
-- Added exact raw-byte regression coverage for UTF-8, UTF-8 BOM, UTF-16 LE, UTF-16 BE, and Windows-1252 saves.
-- Preserved lossless-only Windows-1252 behavior and rejection of unrepresentable text.
-- Retained explicit mixed-EOL safeguards and LF/CRLF normalization behavior.
+- Retained a designated startup document window for recovery and persistent scratchpad ownership.
+- Prevented secondary document windows from independently taking ownership of startup recovery state.
+- Preserved existing startup priority rules for explicit file requests, recovery, scratchpad restoration, and last-document reopening.
+- Kept the established startup visibility and renderer-ready fallback protections.
 
-## Find and navigation reliability
+## Monaco Editor upgrade
 
-- Expanded runtime coverage for Find Next and Find Previous.
-- Verified forward and backward wraparound behavior.
-- Strengthened Go To Line movement coverage.
-- Preserved the canonical 28-shortcut contract: 23 native menu routes and 5 Monaco-owned keyboard routes.
+- Upgraded Monaco Editor from 0.56.0 to 0.57.0.
+- Preserved the lightweight editor architecture without adding language servers, IDE diagnostics, IntelliSense, or workspace features.
+- Retained the existing syntax-highlighting, text-editing, navigation, and transformation features.
 
-## Recovery and scratchpad clarity
+## Native Linux appearance
 
-- Distinguished recovered-file sessions from the persistent untitled scratchpad.
-- Prevented normal scratchpad restoration from being presented as a crash recovery.
-- Preserved startup priority among explicit files, recovery, last-document reopening, and scratchpad state.
+- Improved native Flatpak title-bar, window-control, and menu appearance for explicitly selected Light and Dark themes.
+- The Flatpak launcher reads the saved appearance preference before starting Electron and configures GTK accordingly.
+- Switching Light or Dark continues to update the editor immediately.
+- Native Flatpak window controls and menus adopt the newly selected Light or Dark appearance on the next application launch.
+- System appearance leaves the Flatpak GTK theme override unset, allowing desktop theme selection.
+- Preserved native window controls and menus rather than replacing them with custom renderer-owned chrome.
 
-## Portable settings
+## Flatpak dependency and packaging integrity
 
-- Added versioned JSON export and import for portable editor and appearance preferences.
-- Validated imported documents completely before mutating settings.
-- Preserved machine-local state such as recent files, window size, file positions, and last-document paths.
-- Applied imported settings live across the editor, menus, native theme state, and Preferences window.
-- Added permanent unit and runtime regression coverage for validation, round-trip integrity, and local-state preservation.
+- Regenerated offline Flatpak dependency sources against the current package lockfile.
+- Updated the bundled source references for Monaco Editor 0.57.0 and DOMPurify 3.4.15.
+- Preserved the Electron Flatpak BaseApp and Zypak launcher architecture.
+- Retained offline npm installation during Flatpak package construction.
+- Preserved the existing Flatpak application ID and Linux x86_64 target.
 
-## Accessibility and focus behavior
+## Validation
 
-- Improved keyboard focus containment in application modal dialogs.
-- Restored Monaco editor focus consistently after dialogs close.
-- Hardened large-file progress focus behavior during cancellable reads and non-cancellable model creation.
-- Preserved visible keyboard focus treatment for interactive filtering results.
+- Passed the complete static test suites and full sandboxed Electron runtime suites.
+- Added runtime coverage for simultaneous document windows, focused Save routing, independent file monitoring, Follow File isolation, and Preferences separation.
+- Retained coverage for the 28 canonical shortcuts and eight startup scenarios.
+- Passed the production application build.
+- Validated the Flatpak launcher against saved Light, Dark, System, invalid, and missing theme preferences.
+- Completed visual acceptance of native Flatpak Light and Dark appearance across application restarts.
+- Successfully built the V6 Flatpak development candidate using regenerated offline dependency sources.
+- Final V6 release artifacts and publication are separate release-preparation steps.
 
-## Resource and performance hardening
+## Preserved file-safety guarantees
 
-- Retained the existing 12-cycle Compare Against Disk resource stress test.
-- Added deterministic assertions that temporary Monaco diff editors and models return to baseline.
-- Added BrowserWindow and Linux inotify regression guards around repeated comparison cycles.
-- Added observational file-descriptor and working-set measurements without imposing brittle memory thresholds.
-- Established repeatable startup timing baselines for normal and renderer-ready fallback visibility paths.
-- Found no measured resource leak requiring a speculative memory or performance refactor.
+V6 retains Monaco Notepad file protections, including atomic saves, backup-on-save, read-only handling, guarded external file-change decisions, encoding integrity, Safe Open, large-file safeguards, symbolic-link-safe operations, and unsaved-change protection.
 
-## Validation architecture
+Existing text utilities, recovery safeguards, line-ending controls, and document inspection features remain part of the application.
 
-- Expanded permanent unit, integration, runtime, accelerator, startup, settings-portability, accessibility, and resource-lifecycle coverage.
-- Continued validating real sandboxed Electron windows with isolated temporary profiles and files.
-- Kept diagnostics local and test-oriented rather than adding analytics, telemetry, or background reporting.
+## Platform and scope
 
-## Preserved safety and architecture
-
-V5 does not weaken Monaco Notepad's existing file-safety model. Atomic writes, backup-on-save, symbolic-link-safe saves, executable-mode preservation, Safe Open behavior, read-only protection, external-change detection, encoding safeguards, large-file protections, mixed-EOL handling, and dirty-buffer guards remain part of the application.
-
-## Platform and packaging
-
-- Linux x86_64 remains the only supported platform.
-- AppImage and Flatpak remain the only supported package formats.
-- Windows, macOS, ARM, ARM64, aarch64, Snap, DEB, and RPM remain outside the supported release scope.
-
-## Scope
-
-Monaco Notepad remains a focused single-document text editor. V5 does not add tabs, workspaces, project trees, an embedded terminal, source-control UI, LSP features, IntelliSense, plugins, cloud accounts, telemetry, AI features, or other IDE architecture.
+- Linux x86_64 remains the only supported architecture.
+- AppImage and Flatpak remain the supported package formats.
+- Windows, macOS, ARM, ARM64, aarch64, Snap, DEB, and RPM remain unsupported release targets.
+- Monaco Notepad remains a text editor rather than an IDE.
+- V6 does not introduce tabs, workspaces, project trees, language servers, plugins, cloud accounts, telemetry, or AI features.
