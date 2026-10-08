@@ -1,3 +1,21 @@
 #!/bin/sh
 unset ELECTRON_RUN_AS_NODE
+
+config_root=${XDG_CONFIG_HOME:-"$HOME/.config"}
+config_file="$config_root/monaco-notepad/config.json"
+theme=
+
+if [ -r "$config_file" ]; then
+  theme=$(sed -n 's/^[[:space:]]*"theme"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config_file" | head -n 1)
+fi
+
+case "$theme" in
+  dark)
+    export GTK_THEME=Adwaita:dark
+    ;;
+  light)
+    export GTK_THEME=Adwaita
+    ;;
+esac
+
 exec zypak-wrapper.sh /app/lib/monaco-notepad/monaco-notepad "$@"
